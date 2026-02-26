@@ -7,7 +7,9 @@ mod multi_workspace;
 pub mod notifications;
 pub mod pane;
 pub mod pane_group;
-mod path_list;
+pub mod path_list {
+    pub use util::path_list::{PathList, SerializedPathList};
+}
 mod persistence;
 pub mod searchable;
 mod security_modal;
@@ -26,7 +28,7 @@ pub use multi_workspace::{
     NextWorkspaceInWindow, PreviousWorkspaceInWindow, Sidebar, SidebarEvent, SidebarHandle,
     ToggleWorkspaceSidebar,
 };
-pub use path_list::PathList;
+pub use path_list::{PathList, SerializedPathList};
 pub use title_bar_item::{TitleBarItemView, TitleBarItemViewHandle};
 pub use toast::{ToastAction, ToastLayer, ToastView};
 
