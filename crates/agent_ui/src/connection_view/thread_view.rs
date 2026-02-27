@@ -6427,7 +6427,7 @@ impl ThreadView {
         } else if is_failed {
             "Subagent Failed".into()
         } else {
-            "Spawning Agent…".into()
+            "Spawning agent…".into()
         };
 
         let card_header_id = format!("subagent-header-{}", entry_ix);
