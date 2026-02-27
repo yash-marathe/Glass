@@ -687,6 +687,60 @@ impl Render for MultiWorkspace {
         #[cfg(target_os = "macos")]
         self.sync_unified_sidebar(cx);
 
+        let multi_workspace_enabled = self.multi_workspace_enabled(cx);
+
+        let sidebar: Option<AnyElement> = if multi_workspace_enabled && self.sidebar_open {
+            self.sidebar.as_ref().map(|sidebar_handle| {
+                let weak = cx.weak_entity();
+
+                let sidebar_width = sidebar_handle.width(cx);
+                let resize_handle = deferred(
+                    div()
+                        .id("sidebar-resize-handle")
+                        .absolute()
+                        .right(-SIDEBAR_RESIZE_HANDLE_SIZE / 2.)
+                        .top(px(0.))
+                        .h_full()
+                        .w(SIDEBAR_RESIZE_HANDLE_SIZE)
+                        .cursor_col_resize()
+                        .on_drag(DraggedSidebar, |dragged, _, _, cx| {
+                            cx.stop_propagation();
+                            cx.new(|_| dragged.clone())
+                        })
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .on_mouse_up(MouseButton::Left, move |event, _, cx| {
+                            if event.click_count == 2 {
+                                weak.update(cx, |this, cx| {
+                                    if let Some(sidebar) = this.sidebar.as_mut() {
+                                        sidebar.set_width(None, cx);
+                                    }
+                                })
+                                .ok();
+                                cx.stop_propagation();
+                            }
+                        })
+                        .occlude(),
+                );
+
+                div()
+                    .id("sidebar-container")
+                    .relative()
+                    .h_full()
+                    .w(sidebar_width)
+                    .flex_shrink_0()
+                    .child(sidebar_handle.to_any())
+                    .child(resize_handle)
+                    .into_any_element()
+            })
+        } else {
+            None
+        };
+
+        let ui_font = theme::setup_ui_font(window, cx);
+        let text_color = cx.theme().colors().text;
+
         let workspace = self.workspace().clone();
         let workspace_key_context = workspace.update(cx, |workspace, cx| workspace.key_context(cx));
         let root = workspace.update(cx, |workspace, cx| workspace.actions(h_flex(), window, cx));
@@ -713,15 +767,31 @@ impl Render for MultiWorkspace {
                         this.activate_previous_workspace(window, cx);
                     },
                 ))
-                .on_action(cx.listener(
-                    |this: &mut Self, _: &ToggleWorkspaceSidebar, window, cx| {
-                        this.toggle_sidebar(window, cx);
+                .when(self.multi_workspace_enabled(cx), |this| {
+                    this.on_action(cx.listener(
+                        |this: &mut Self, _: &ToggleWorkspaceSidebar, window, cx| {
+                            this.toggle_sidebar(window, cx);
+                        },
+                    ))
+                    .on_action(cx.listener(
+                        |this: &mut Self, _: &FocusWorkspaceSidebar, window, cx| {
+                            this.focus_sidebar(window, cx);
+                        },
+                    ))
+                })
+                .when(
+                    self.sidebar_open() && self.multi_workspace_enabled(cx),
+                    |this| {
+                        this.on_drag_move(cx.listener(
+                            |this: &mut Self, e: &DragMoveEvent<DraggedSidebar>, _window, cx| {
+                                if let Some(sidebar) = &this.sidebar {
+                                    let new_width = e.event.position.x;
+                                    sidebar.set_width(Some(new_width), cx);
+                                }
+                            },
+                        ))
+                        .children(sidebar)
                     },
-                ))
-                .on_action(
-                    cx.listener(|this: &mut Self, _: &FocusWorkspaceSidebar, window, cx| {
-                        this.focus_sidebar(window, cx);
-                    }),
                 )
                 .child({
                     let workspace_content = div()
@@ -768,7 +838,7 @@ impl Render for MultiWorkspace {
             window,
             cx,
             Tiling {
-                left: self.sidebar_open(),
+                left: multi_workspace_enabled && self.sidebar_open,
                 ..Tiling::default()
             },
         )
