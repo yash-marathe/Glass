@@ -548,7 +548,7 @@ impl RecentProjects {
                 focus_handle,
                 open_folders,
                 project_connection_options,
-                ProjectPickerStyle::Modal,
+                ProjectPickerStyle::Popover,
             );
 
             Self::new(delegate, fs, 34., window, cx)

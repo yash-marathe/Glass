@@ -1202,6 +1202,7 @@ pub enum Event {
     },
     ZoomChanged,
     ModalOpened,
+    Activate,
 }
 
 #[derive(Debug, Clone)]
@@ -1276,7 +1277,7 @@ pub struct Workspace {
     panes_by_item: HashMap<EntityId, WeakEntity<Pane>>,
     active_pane: Entity<Pane>,
     last_active_center_pane: Option<WeakEntity<Pane>>,
-    modal_layer: Entity<ModalLayer>,
+    pub(crate) modal_layer: Entity<ModalLayer>,
     toast_layer: Entity<ToastLayer>,
     titlebar_item: Option<AnyView>,
     notifications: Notifications,
@@ -1627,36 +1628,7 @@ impl Workspace {
                         .timer(Duration::from_millis(100))
                         .await;
                     this.update_in(cx, |this, window, cx| {
-                        if let Some(display) = window.display(cx)
-                            && let Ok(display_uuid) = display.uuid()
-                        {
-                            let window_bounds = window.inner_window_bounds();
-                            let has_paths = !this.root_paths(cx).is_empty();
-                            if !has_paths {
-                                cx.background_executor()
-                                    .spawn(persistence::write_default_window_bounds(
-                                        window_bounds,
-                                        display_uuid,
-                                    ))
-                                    .detach_and_log_err(cx);
-                            }
-                            if let Some(database_id) = workspace_id {
-                                cx.background_executor()
-                                    .spawn(DB.set_window_open_status(
-                                        database_id,
-                                        SerializedWindowBounds(window_bounds),
-                                        display_uuid,
-                                    ))
-                                    .detach_and_log_err(cx);
-                            } else {
-                                cx.background_executor()
-                                    .spawn(persistence::write_default_window_bounds(
-                                        window_bounds,
-                                        display_uuid,
-                                    ))
-                                    .detach_and_log_err(cx);
-                            }
-                        }
+                        this.save_window_bounds(window, cx).detach();
                         this.bounds_save_task_queued.take();
                     })
                     .ok();
@@ -2756,6 +2728,10 @@ impl Workspace {
 
                 close_intent != CloseIntent::ReplaceWindow && remaining_workspaces == 0
             };
+
+            if close_intent == CloseIntent::CloseWindow {
+                this.update(cx, |_, cx| cx.emit(Event::Activate))?;
+            }
 
             let save_result = this
                 .update_in(cx, |this, window, cx| {
@@ -5480,7 +5456,48 @@ impl Workspace {
     pub fn flush_serialization(&mut self, window: &mut Window, cx: &mut App) -> Task<()> {
         self._schedule_serialize_workspace.take();
         self._serialize_workspace_task.take();
-        self.serialize_workspace_internal(window, cx)
+        self.bounds_save_task_queued.take();
+
+        let bounds_task = self.save_window_bounds(window, cx);
+        let serialize_task = self.serialize_workspace_internal(window, cx);
+        cx.spawn(async move |_| {
+            bounds_task.await;
+            serialize_task.await;
+        })
+    }
+
+    fn save_window_bounds(&self, window: &mut Window, cx: &mut App) -> Task<()> {
+        let Some(display) = window.display(cx) else {
+            return Task::ready(());
+        };
+        let Ok(display_uuid) = display.uuid() else {
+            return Task::ready(());
+        };
+
+        let window_bounds = window.inner_window_bounds();
+        let database_id = self.database_id;
+        let has_paths = !self.root_paths(cx).is_empty();
+
+        cx.background_executor().spawn(async move {
+            if !has_paths {
+                persistence::write_default_window_bounds(window_bounds, display_uuid)
+                    .await
+                    .log_err();
+            }
+            if let Some(database_id) = database_id {
+                DB.set_window_open_status(
+                    database_id,
+                    SerializedWindowBounds(window_bounds),
+                    display_uuid,
+                )
+                .await
+                .log_err();
+            } else {
+                persistence::write_default_window_bounds(window_bounds, display_uuid)
+                    .await
+                    .log_err();
+            }
+        })
     }
 
     pub fn root_paths(&self, cx: &App) -> Vec<Arc<Path>> {
@@ -5943,7 +5960,46 @@ impl Workspace {
         })
     }
 
-    fn actions(&self, div: Div, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub fn key_context(&self, cx: &App) -> KeyContext {
+        let mut context = KeyContext::new_with_defaults();
+        context.add("Workspace");
+        context.set("keyboard_layout", cx.keyboard_layout().name().to_string());
+        if let Some(status) = self
+            .debugger_provider
+            .as_ref()
+            .and_then(|provider| provider.active_thread_state(cx))
+        {
+            match status {
+                ThreadStatus::Running | ThreadStatus::Stepping => {
+                    context.add("debugger_running");
+                }
+                ThreadStatus::Stopped => context.add("debugger_stopped"),
+                ThreadStatus::Exited | ThreadStatus::Ended => {}
+            }
+        }
+
+        if self.left_dock.read(cx).is_open() {
+            if let Some(active_panel) = self.left_dock.read(cx).active_panel() {
+                context.set("left_dock", active_panel.panel_key());
+            }
+        }
+
+        if self.right_dock.read(cx).is_open() {
+            if let Some(active_panel) = self.right_dock.read(cx).active_panel() {
+                context.set("right_dock", active_panel.panel_key());
+            }
+        }
+
+        if self.bottom_dock.read(cx).is_open() {
+            if let Some(active_panel) = self.bottom_dock.read(cx).active_panel() {
+                context.set("bottom_dock", active_panel.panel_key());
+            }
+        }
+
+        context
+    }
+
+    pub fn actions(&self, div: Div, window: &mut Window, cx: &mut Context<Self>) -> Div {
         self.add_workspace_actions_listeners(div, window, cx)
             .on_action(cx.listener(
                 |_workspace, action_sequence: &settings::ActionSequence, window, cx| {
@@ -5958,7 +6014,6 @@ impl Workspace {
             .on_action(cx.listener(Self::save_all))
             .on_action(cx.listener(Self::send_keystrokes))
             .on_action(cx.listener(Self::add_folder_to_project))
-            .on_action(cx.listener(Self::close_window))
             .on_action(cx.listener(Self::activate_pane_at_index))
             .on_action(cx.listener(Self::move_item_to_pane_at_index))
             .on_action(cx.listener(Self::move_focused_panel_to_next_position))
@@ -6985,41 +7040,6 @@ impl Render for Workspace {
         if FIRST_PAINT.swap(false, std::sync::atomic::Ordering::Relaxed) {
             log::info!("Rendered first frame");
         }
-        let mut context = KeyContext::new_with_defaults();
-        context.add("Workspace");
-        context.set("keyboard_layout", cx.keyboard_layout().name().to_string());
-        if let Some(status) = self
-            .debugger_provider
-            .as_ref()
-            .and_then(|provider| provider.active_thread_state(cx))
-        {
-            match status {
-                ThreadStatus::Running | ThreadStatus::Stepping => {
-                    context.add("debugger_running");
-                }
-                ThreadStatus::Stopped => context.add("debugger_stopped"),
-                ThreadStatus::Exited | ThreadStatus::Ended => {}
-            }
-        }
-
-        if self.left_dock.read(cx).is_open() {
-            if let Some(active_panel) = self.left_dock.read(cx).active_panel() {
-                context.set("left_dock", active_panel.panel_key());
-            }
-        }
-
-        if self.right_dock.read(cx).is_open() {
-            if let Some(active_panel) = self.right_dock.read(cx).active_panel() {
-                context.set("right_dock", active_panel.panel_key());
-            }
-        }
-
-        if self.bottom_dock.read(cx).is_open() {
-            if let Some(active_panel) = self.bottom_dock.read(cx).active_panel() {
-                context.set("bottom_dock", active_panel.panel_key());
-            }
-        }
-
         let centered_layout = self.centered_layout
             && self.center.panes().len() == 1
             && self.active_item(cx).is_some();
@@ -7056,8 +7076,7 @@ impl Render for Workspace {
             .collect::<Vec<_>>();
         let bottom_dock_layout = WorkspaceSettings::get_global(cx).bottom_dock_layout;
 
-        self.actions(div(), window, cx)
-            .key_context(context)
+        div()
             .relative()
             .size_full()
             .flex()
@@ -7521,7 +7540,6 @@ impl Render for Workspace {
                                 }))
                                 .children(self.render_notifications(window, cx)),
                         )
-                        .child(self.modal_layer.clone())
                         .child(self.toast_layer.clone()),
                 )
     }

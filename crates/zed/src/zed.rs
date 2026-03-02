@@ -371,8 +371,18 @@ pub fn initialize_workspace(
             return;
         };
         let multi_workspace_handle = cx.entity();
-        let sidebar = cx.new(|cx| Sidebar::new(multi_workspace_handle, window, cx));
+        let sidebar = cx.new(|cx| Sidebar::new(multi_workspace_handle.clone(), window, cx));
         multi_workspace.register_sidebar(sidebar, window, cx);
+
+        let handle = multi_workspace_handle.downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            handle
+                .update(cx, |multi_workspace, cx| {
+                    multi_workspace.close_window(&CloseWindow, window, cx);
+                    false
+                })
+                .unwrap_or(true)
+        });
     })
     .detach();
 
@@ -590,17 +600,6 @@ pub fn initialize_workspace(
                 });
             }
         }
-
-        let handle = cx.entity().downgrade();
-        window.on_window_should_close(cx, move |window, cx| {
-            handle
-                .update(cx, |workspace, cx| {
-                    // We'll handle closing asynchronously
-                    workspace.close_window(&CloseWindow, window, cx);
-                    false
-                })
-                .unwrap_or(true)
-        });
 
         initialize_panels(prompt_builder.clone(), window, cx);
         register_actions(app_state.clone(), workspace, window, cx);
