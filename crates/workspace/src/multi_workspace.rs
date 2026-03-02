@@ -1,17 +1,21 @@
 use anyhow::Result;
+#[cfg(target_os = "macos")]
+use gpui::native_sidebar;
 use gpui::{
     AnyView, App, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable, ManagedView,
-    Pixels, Render, Subscription, Task, Tiling, Window, WindowId, actions,
+    Pixels, Render, Subscription, Task, Tiling, Window, WindowBackgroundAppearance, WindowId,
+    actions,
 };
 use project::Project;
 use std::future::Future;
 use std::path::PathBuf;
+use theme::ActiveTheme;
 use ui::prelude::*;
 use util::ResultExt;
 
 use crate::{
     CloseIntent, CloseWindow, DockPosition, Event as WorkspaceEvent, Item, ModalView, Panel, Toast,
-    Workspace, WorkspaceId, client_side_decorations, notifications::NotificationId,
+    UnifiedSidebar, Workspace, WorkspaceId, client_side_decorations, notifications::NotificationId,
 };
 
 actions!(
@@ -95,6 +99,8 @@ pub struct MultiWorkspace {
     window_id: WindowId,
     workspaces: Vec<Entity<Workspace>>,
     active_workspace_index: usize,
+    #[cfg(target_os = "macos")]
+    unified_sidebar: Entity<UnifiedSidebar>,
     sidebar: Option<Box<dyn SidebarHandle>>,
     sidebar_open: bool,
     _sidebar_subscription: Option<Subscription>,
@@ -119,10 +125,17 @@ impl MultiWorkspace {
         });
         let quit_subscription = cx.on_app_quit(Self::app_will_quit);
         Self::subscribe_to_workspace(&workspace, cx);
+        #[cfg(target_os = "macos")]
+        let unified_sidebar = {
+            let left_dock = workspace.read(cx).left_dock().clone();
+            cx.new(|_cx| UnifiedSidebar::new(left_dock))
+        };
         Self {
             window_id: window.window_handle().window_id(),
             workspaces: vec![workspace],
             active_workspace_index: 0,
+            #[cfg(target_os = "macos")]
+            unified_sidebar,
             sidebar: None,
             sidebar_open: false,
             _sidebar_subscription: None,
@@ -152,6 +165,11 @@ impl MultiWorkspace {
 
     pub fn sidebar(&self) -> Option<&dyn SidebarHandle> {
         self.sidebar.as_deref()
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn unified_sidebar(&self) -> &Entity<UnifiedSidebar> {
+        &self.unified_sidebar
     }
 
     pub fn sidebar_open(&self) -> bool {
@@ -226,6 +244,33 @@ impl MultiWorkspace {
         self.sidebar_open
     }
 
+    /// Sync the shared unified sidebar to point at the active workspace's left dock,
+    /// mode, width, and browser view.
+    #[cfg(target_os = "macos")]
+    fn sync_unified_sidebar(&self, cx: &mut App) {
+        let active_ws = self.workspace().clone();
+        let (left_dock, mode, per_ws_sidebar) = {
+            let workspace = active_ws.read(cx);
+            (
+                workspace.left_dock().clone(),
+                workspace.active_mode_id(),
+                workspace.unified_sidebar.clone(),
+            )
+        };
+        let (width, browser_view) = {
+            let per_ws = per_ws_sidebar.read(cx);
+            (per_ws.width(), per_ws.browser_sidebar_view().cloned())
+        };
+        self.unified_sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_left_dock(left_dock, cx);
+            sidebar.set_mode(mode, cx);
+            sidebar.set_width(width, cx);
+            if let Some(view) = browser_view {
+                sidebar.set_browser_sidebar_view(view, cx);
+            }
+        });
+    }
+
     pub fn workspace(&self) -> &Entity<Workspace> {
         &self.workspaces[self.active_workspace_index]
     }
@@ -240,7 +285,18 @@ impl MultiWorkspace {
 
     pub fn activate(&mut self, workspace: Entity<Workspace>, cx: &mut Context<Self>) {
         let old_index = self.active_workspace_index;
+        log::info!(
+            "MultiWorkspace::activate: workspace={:?}, old_index={}, total={}",
+            workspace.entity_id(),
+            old_index,
+            self.workspaces.len(),
+        );
         let new_index = self.set_active_workspace(workspace, cx);
+        log::info!(
+            "MultiWorkspace::activate: new_index={}, changed={}",
+            new_index,
+            old_index != new_index,
+        );
         if old_index != new_index {
             self.serialize(cx);
         }
@@ -280,7 +336,13 @@ impl MultiWorkspace {
             index < self.workspaces.len(),
             "workspace index out of bounds"
         );
+        let old_index = self.active_workspace_index;
+        log::info!(
+            "MultiWorkspace::activate_index: {} -> {}, total={}",
+            old_index, index, self.workspaces.len(),
+        );
         self.active_workspace_index = index;
+        self.sync_unified_sidebar(cx);
         self.serialize(cx);
         self.focus_active_workspace(window, cx);
         cx.notify();
@@ -614,6 +676,9 @@ impl MultiWorkspace {
 
 impl Render for MultiWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(target_os = "macos")]
+        self.sync_unified_sidebar(cx);
+
         let workspace = self.workspace().clone();
         let workspace_key_context =
             workspace.update(cx, |workspace, cx| workspace.key_context(cx));
@@ -649,14 +714,50 @@ impl Render for MultiWorkspace {
                         this.focus_sidebar(window, cx);
                     }),
                 )
-                .child(
-                    div()
+                .child({
+                    let workspace_content = div()
                         .flex()
                         .flex_1()
                         .size_full()
                         .overflow_hidden()
-                        .child(self.workspace().clone()),
-                )
+                        .child(self.workspace().clone());
+
+                    #[cfg(target_os = "macos")]
+                    let workspace_content = {
+                        let ws = self.workspace().read(cx);
+                        // Use visible_panel() instead of has_visible_content() to avoid
+                        // reading MultiWorkspace (which is already being updated in render).
+                        let sidebar_collapsed =
+                            ws.left_dock().read(cx).visible_panel().is_none();
+                        let sidebar_width = self.unified_sidebar.read(cx).width();
+                        let sidebar_titlebar_fill =
+                            match cx.theme().window_background_appearance() {
+                                WindowBackgroundAppearance::Opaque => {
+                                    Some(cx.theme().colors().panel_background)
+                                }
+                                _ => None,
+                            };
+                        div()
+                            .size_full()
+                            .flex()
+                            .flex_row()
+                            .child(
+                                native_sidebar("workspace-unified-sidebar", &[""; 0])
+                                    .sidebar_view(self.unified_sidebar.clone())
+                                    .sidebar_width(sidebar_width)
+                                    .min_sidebar_width(160.0)
+                                    .max_sidebar_width(480.0)
+                                    .manage_window_chrome(false)
+                                    .manage_toolbar(false)
+                                    .collapsed(sidebar_collapsed)
+                                    .sidebar_background_color(sidebar_titlebar_fill)
+                                    .size_full(),
+                            )
+                            .child(workspace_content)
+                    };
+
+                    workspace_content
+                })
                 .child(self.workspace().read(cx).modal_layer.clone()),
             window,
             cx,

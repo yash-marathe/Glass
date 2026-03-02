@@ -186,9 +186,20 @@ impl UnifiedSidebar {
         }
     }
 
+    pub fn browser_sidebar_view(&self) -> Option<&AnyView> {
+        self.browser_sidebar_view.as_ref()
+    }
+
     pub fn set_browser_sidebar_view(&mut self, view: AnyView, cx: &mut Context<Self>) {
         self.browser_sidebar_view = Some(view);
         cx.notify();
+    }
+
+    pub fn set_left_dock(&mut self, left_dock: Entity<Dock>, cx: &mut Context<Self>) {
+        if self.left_dock.entity_id() != left_dock.entity_id() {
+            self.left_dock = left_dock;
+            cx.notify();
+        }
     }
 
     pub fn set_width(&mut self, width: f64, cx: &mut Context<Self>) {
@@ -1269,7 +1280,7 @@ pub struct Workspace {
     center: PaneGroup,
     left_dock: Entity<Dock>,
     #[cfg(target_os = "macos")]
-    unified_sidebar: Entity<UnifiedSidebar>,
+    pub(crate) unified_sidebar: Entity<UnifiedSidebar>,
     bottom_dock: Entity<Dock>,
     right_dock: Entity<Dock>,
     panes: Vec<Entity<Pane>>,
@@ -6539,10 +6550,11 @@ impl Workspace {
     fn render_with_unified_sidebar(
         &self,
         mode_content: AnyElement,
+        unified_sidebar: Entity<UnifiedSidebar>,
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
-        let sidebar_width = self.unified_sidebar.read(cx).width();
+        let sidebar_width = unified_sidebar.read(cx).width();
 
         let sidebar_collapsed = if self.active_mode == ModeId::BROWSER {
             let sidebar_active = cx
@@ -6570,7 +6582,7 @@ impl Workspace {
             .flex_row()
             .child(
                 native_sidebar("workspace-unified-sidebar", &[""; 0])
-                    .sidebar_view(self.unified_sidebar.clone())
+                    .sidebar_view(unified_sidebar)
                     .sidebar_width(sidebar_width)
                     .min_sidebar_width(160.0)
                     .max_sidebar_width(480.0)
@@ -7504,12 +7516,26 @@ impl Render for Workspace {
                                         editor_layout.into_any_element()
                                     };
 
+                                    // On macOS, the native_sidebar is rendered by
+                                    // MultiWorkspace so that the NSSplitViewController's
+                                    // element state persists across workspace switches.
+                                    // Workspace only wraps with native_sidebar when NOT
+                                    // inside a MultiWorkspace (standalone window).
                                     #[cfg(target_os = "macos")]
-                                    let mode_content = self.render_with_unified_sidebar(
-                                        mode_content,
-                                        window,
-                                        cx,
-                                    );
+                                    let mode_content = if window
+                                        .root::<MultiWorkspace>()
+                                        .flatten()
+                                        .is_some()
+                                    {
+                                        mode_content
+                                    } else {
+                                        self.render_with_unified_sidebar(
+                                            mode_content,
+                                            self.unified_sidebar.clone(),
+                                            window,
+                                            cx,
+                                        )
+                                    };
 
                                     mode_content
                                 })

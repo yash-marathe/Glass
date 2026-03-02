@@ -22,15 +22,18 @@ use std::{
 use theme::ActiveTheme;
 use ui::{Tab, prelude::*};
 
-fn active_multi_workspace_for_workspace(
+fn multi_workspace_for_workspace(
     window: &Window,
     workspace: &Entity<Workspace>,
     cx: &App,
 ) -> Option<Entity<MultiWorkspace>> {
     let multi_workspace = window.root::<MultiWorkspace>().flatten()?;
-    let is_active_workspace =
-        multi_workspace.read(cx).workspace().entity_id() == workspace.entity_id();
-    if is_active_workspace {
+    let contains = multi_workspace
+        .read(cx)
+        .workspaces()
+        .iter()
+        .any(|w| w.entity_id() == workspace.entity_id());
+    if contains {
         Some(multi_workspace)
     } else {
         None
@@ -84,7 +87,7 @@ impl Render for DockButtonBar {
             (&workspace_read.bottom_dock, DockPosition::Bottom),
             (&workspace_read.right_dock, DockPosition::Right),
         ];
-        let workspace_sidebar_open = active_multi_workspace_for_workspace(window, &workspace, cx)
+        let workspace_sidebar_open = multi_workspace_for_workspace(window, &workspace, cx)
             .is_some_and(|multi_workspace| multi_workspace.read(cx).sidebar_open());
 
         // Collect all panels from all docks for the segmented control.
@@ -151,7 +154,7 @@ impl Render for DockButtonBar {
                     if event.index != workspace_segment_index
                         && let Some(workspace) = this.workspace.upgrade()
                         && let Some(multi_workspace) =
-                            active_multi_workspace_for_workspace(window, &workspace, cx)
+                            multi_workspace_for_workspace(window, &workspace, cx)
                     {
                         workspace_sidebar_was_open = multi_workspace.read(cx).sidebar_open();
                         multi_workspace.update(cx, |multi_workspace, cx| {
@@ -199,7 +202,7 @@ impl Render for DockButtonBar {
     }
 }
 
-fn icon_to_sf_symbol(icon: IconName) -> &'static str {
+pub(crate) fn icon_to_sf_symbol(icon: IconName) -> &'static str {
     match icon {
         IconName::FileTree => "folder",
         IconName::TerminalAlt => "terminal",
@@ -391,7 +394,7 @@ impl From<&dyn PanelHandle> for AnyView {
 /// Can contain multiple panels and show/hide itself with all contents.
 pub struct Dock {
     position: DockPosition,
-    panel_entries: Vec<PanelEntry>,
+    pub(crate) panel_entries: Vec<PanelEntry>,
     workspace: WeakEntity<Workspace>,
     is_open: bool,
     active_panel_index: Option<usize>,
@@ -454,8 +457,8 @@ impl DockPosition {
     }
 }
 
-struct PanelEntry {
-    panel: Arc<dyn PanelHandle>,
+pub(crate) struct PanelEntry {
+    pub(crate) panel: Arc<dyn PanelHandle>,
     _subscriptions: [Subscription; 3],
 }
 
@@ -610,7 +613,7 @@ impl Dock {
             })
     }
 
-    fn active_panel_entry(&self) -> Option<&PanelEntry> {
+    pub(crate) fn active_panel_entry(&self) -> Option<&PanelEntry> {
         self.active_panel_index
             .and_then(|index| self.panel_entries.get(index))
     }
@@ -941,8 +944,17 @@ impl Dock {
         }
 
         let workspace = self.workspace.upgrade()?;
-        let multi_workspace = active_multi_workspace_for_workspace(window, &workspace, cx)?;
-        let multi_workspace = multi_workspace.read(cx);
+        let multi_ws = multi_workspace_for_workspace(window, &workspace, cx)?;
+        let multi_workspace = multi_ws.read(cx);
+
+        // Only the active workspace's dock should claim the shared Sidebar entity.
+        // If an inactive dock also renders it as a child, GPUI reparents the entity
+        // to the inactive (invisible) tree, making it vanish from the visible surface.
+        let is_active = multi_workspace.workspace().entity_id() == workspace.entity_id();
+        if !is_active {
+            return None;
+        }
+
         if !multi_workspace.sidebar_open() {
             return None;
         }
@@ -963,7 +975,7 @@ impl Dock {
         let Some(workspace) = self.workspace.upgrade() else {
             return false;
         };
-        let Some(multi_workspace) = active_multi_workspace_for_workspace(window, &workspace, cx)
+        let Some(multi_workspace) = multi_workspace_for_workspace(window, &workspace, cx)
         else {
             return false;
         };
@@ -993,7 +1005,7 @@ impl Dock {
         let Some(workspace) = self.workspace.upgrade() else {
             return false;
         };
-        let Some(multi_workspace) = active_multi_workspace_for_workspace(window, &workspace, cx)
+        let Some(multi_workspace) = multi_workspace_for_workspace(window, &workspace, cx)
         else {
             return false;
         };
