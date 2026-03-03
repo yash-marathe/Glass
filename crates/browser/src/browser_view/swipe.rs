@@ -1,5 +1,5 @@
 use crate::input;
-use gpui::{Context, ScrollDelta, TouchPhase, Window, point};
+use gpui::{Context, ScrollDelta, TouchPhase, Window, point, px};
 use std::time::Duration;
 
 use super::BrowserView;
@@ -80,7 +80,24 @@ impl BrowserView {
                             cx.notify();
                             return;
                         } else {
+                            // Axis locked to vertical scroll. Forward the full accumulated
+                            // delta so the page doesn't appear frozen during the lock phase.
                             self.swipe_state.phase = SwipePhase::Vertical;
+                            if let Some(tab) = self.active_tab() {
+                                let offset = point(
+                                    self.content_bounds.origin.x,
+                                    self.content_bounds.origin.y,
+                                );
+                                let flush_event = gpui::ScrollWheelEvent {
+                                    delta: ScrollDelta::Pixels(point(
+                                        px(self.swipe_state.accumulated_x),
+                                        px(self.swipe_state.accumulated_y),
+                                    )),
+                                    ..event.clone()
+                                };
+                                input::handle_scroll_wheel(&tab.read(cx), &flush_event, offset);
+                            }
+                            return;
                         }
                     } else {
                         return;

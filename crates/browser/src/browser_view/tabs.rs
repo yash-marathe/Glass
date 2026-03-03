@@ -323,7 +323,8 @@ impl BrowserView {
                 }
 
                 let wait_us = CefInstance::time_until_next_pump_us();
-                let sleep_us = wait_us.clamp(500, 4_000);
+                // Cap at 1ms to keep frame delivery latency under half a frame at 60fps.
+                let sleep_us = wait_us.clamp(500, 1_000);
                 cx.background_executor()
                     .timer(Duration::from_micros(sleep_us))
                     .await;

@@ -122,6 +122,18 @@ wrap_app! {
                 Some(&"component-updater".into()),
                 Some(&"fast-update".into()),
             );
+            // GPU rendering performance: use Metal backend on macOS and bypass
+            // the GPU blocklist so hardware acceleration is always active.
+            #[cfg(target_os = "macos")]
+            {
+                command_line.append_switch_with_value(
+                    Some(&"use-angle".into()),
+                    Some(&"metal".into()),
+                );
+            }
+            command_line.append_switch(Some(&"ignore-gpu-blocklist".into()));
+            command_line.append_switch(Some(&"enable-gpu-rasterization".into()));
+            command_line.append_switch(Some(&"enable-zero-copy".into()));
             #[cfg(debug_assertions)]
             {
                 command_line.append_switch(Some(&"enable-logging=stderr".into()));
