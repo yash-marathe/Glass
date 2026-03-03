@@ -134,6 +134,14 @@ wrap_app! {
             command_line.append_switch(Some(&"ignore-gpu-blocklist".into()));
             command_line.append_switch(Some(&"enable-gpu-rasterization".into()));
             command_line.append_switch(Some(&"enable-zero-copy".into()));
+            // Hardware video decoding: uses VideoToolbox on macOS for H.264/HEVC,
+            // offloading decode from CPU to the media engine.
+            command_line.append_switch(Some(&"enable-accelerated-video-decode".into()));
+            command_line.append_switch(Some(&"enable-accelerated-mjpeg-decode".into()));
+            command_line.append_switch_with_value(
+                Some(&"enable-features".into()),
+                Some(&"PlatformHEVCDecoderSupport,PlatformEncryptedDolbyVision".into()),
+            );
             #[cfg(debug_assertions)]
             {
                 command_line.append_switch(Some(&"enable-logging=stderr".into()));
