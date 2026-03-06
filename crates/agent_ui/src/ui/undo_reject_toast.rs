@@ -1,6 +1,6 @@
 use action_log::ActionLog;
 use gpui::{App, Entity};
-use toast::{StatusToast, ToastIcon};
+use notifications::status_toast::{StatusToast, ToastIcon};
 use ui::prelude::*;
 use workspace::Workspace;
 

@@ -8,7 +8,6 @@ use std::{ops::Range, sync::Arc};
 
 use agent::ContextServerRegistry;
 use anyhow::Result;
-use client::zed_urls;
 use cloud_api_types::Plan;
 use collections::HashMap;
 use context_server::ContextServerId;
@@ -17,27 +16,25 @@ use extension::ExtensionManifest;
 use extension_host::ExtensionStore;
 use fs::Fs;
 use gpui::{
-    Action, AnyView, App, AsyncWindowContext, Entity, EventEmitter, FocusHandle, Focusable,
+    Action, AnyView, App, AsyncWindowContext, Corner, Entity, EventEmitter, FocusHandle, Focusable,
     ScrollHandle, Subscription, Task, WeakEntity,
 };
+use itertools::Itertools;
 use language::LanguageRegistry;
 use language_model::{
     IconOrSvg, LanguageModelProvider, LanguageModelProviderId, LanguageModelRegistry,
     ZED_CLOUD_PROVIDER_ID,
 };
 use language_models::AllLanguageModelSettings;
-use toast::{StatusToast, ToastIcon};
+use notifications::status_toast::{StatusToast, ToastIcon};
 use project::{
-    agent_server_store::{
-        AgentServerStore, CLAUDE_AGENT_NAME, CODEX_NAME, ExternalAgentServerName,
-        ExternalAgentSource, GEMINI_NAME,
-    },
+    agent_server_store::{AgentServerStore, ExternalAgentServerName, ExternalAgentSource},
     context_server_store::{ContextServerConfiguration, ContextServerStatus, ContextServerStore},
 };
 use settings::{Settings, SettingsStore, update_settings_file};
 use ui::{
-    ButtonStyle, Chip, CommonAnimationExt, Disclosure, Divider,
-    DividerColor, ElevationIndex, Indicator, LabelSize, Switch, Tooltip,
+    ButtonStyle, Chip, CommonAnimationExt, ContextMenu, ContextMenuEntry, Disclosure, Divider,
+    DividerColor, ElevationIndex, Indicator, LabelSize, PopoverMenu, Switch, Tooltip,
     WithScrollbar, prelude::*,
 };
 use util::ResultExt as _;
@@ -256,7 +253,7 @@ impl AgentConfiguration {
                             .py_0p5()
                             .w_full()
                             .justify_between()
-                            .theme_rounded_sm(cx)
+                            .rounded_sm()
                             .hover(|hover| hover.bg(cx.theme().colors().element_hover))
                             .child(
                                 h_flex()
@@ -423,52 +420,6 @@ impl AgentConfiguration {
     ) -> impl IntoElement {
         let providers = LanguageModelRegistry::read_global(cx).visible_providers();
 
-        #[cfg(target_os = "macos")]
-        let popover_menu = {
-            use gpui::{NativeMenuItem, show_native_popup_menu};
-            let workspace = self.workspace.clone();
-            div()
-                .child(
-                    Button::new("add-provider", "Add Provider")
-                        .style(ButtonStyle::Outlined)
-                        .icon_position(IconPosition::Start)
-                        .icon(IconName::Plus)
-                        .icon_size(IconSize::Small)
-                        .icon_color(Color::Muted)
-                        .label_size(LabelSize::Small),
-                )
-                .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
-                    let items = vec![
-                        NativeMenuItem::action("Compatible APIs").enabled(false),
-                        NativeMenuItem::action("OpenAI"),
-                    ];
-                    let workspace = workspace.clone();
-                    show_native_popup_menu(
-                        &items,
-                        event.position,
-                        window,
-                        cx,
-                        move |index, window, cx| {
-                            // Index 0 is the disabled "Compatible APIs" header
-                            if index == 1 {
-                                workspace
-                                    .update(cx, |workspace, cx| {
-                                        AddLlmProviderModal::toggle(
-                                            LlmCompatibleProvider::OpenAi,
-                                            workspace,
-                                            window,
-                                            cx,
-                                        );
-                                    })
-                                    .log_err();
-                            }
-                        },
-                    );
-                })
-                .into_any_element()
-        };
-
-        #[cfg(not(target_os = "macos"))]
         let popover_menu = PopoverMenu::new("add-provider-popover")
             .trigger(
                 Button::new("add-provider", "Add Provider")
@@ -505,8 +456,7 @@ impl AgentConfiguration {
             .offset(gpui::Point {
                 x: px(0.0),
                 y: px(2.0),
-            })
-            .into_any_element();
+            });
 
         v_flex()
             .w_full()
@@ -567,50 +517,6 @@ impl AgentConfiguration {
     ) -> impl IntoElement {
         let context_server_ids = self.context_server_store.read(cx).server_ids();
 
-        #[cfg(target_os = "macos")]
-        let add_server_popover = {
-            use gpui::{NativeMenuItem, show_native_popup_menu};
-            div()
-                .child(
-                    Button::new("add-server", "Add Server")
-                        .style(ButtonStyle::Outlined)
-                        .icon_position(IconPosition::Start)
-                        .icon(IconName::Plus)
-                        .icon_size(IconSize::Small)
-                        .icon_color(Color::Muted)
-                        .label_size(LabelSize::Small),
-                )
-                .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
-                    let items = vec![
-                        NativeMenuItem::action("Add Custom Server"),
-                        NativeMenuItem::action("Install from Extensions"),
-                    ];
-                    show_native_popup_menu(
-                        &items,
-                        event.position,
-                        window,
-                        cx,
-                        move |index, window, cx| match index {
-                            0 => window
-                                .dispatch_action(crate::AddContextServer.boxed_clone(), cx),
-                            1 => window.dispatch_action(
-                                zed_actions::Extensions {
-                                    category_filter: Some(
-                                        ExtensionCategoryFilter::ContextServers,
-                                    ),
-                                    id: None,
-                                }
-                                .boxed_clone(),
-                                cx,
-                            ),
-                            _ => {}
-                        },
-                    );
-                })
-                .into_any_element()
-        };
-
-        #[cfg(not(target_os = "macos"))]
         let add_server_popover = PopoverMenu::new("add-server-popover")
             .trigger(
                 Button::new("add-server", "Add Server")
@@ -650,8 +556,7 @@ impl AgentConfiguration {
             .offset(gpui::Point {
                 x: px(0.0),
                 y: px(2.0),
-            })
-            .into_any_element();
+            });
 
         v_flex()
             .border_b_1()
@@ -677,7 +582,7 @@ impl AgentConfiguration {
                                     .border_1()
                                     .border_dashed()
                                     .border_color(cx.theme().colors().border.opacity(0.6))
-                                    .theme_rounded_sm(cx)
+                                    .rounded_sm()
                                     .child(
                                         Label::new("No MCP servers added yet.")
                                             .color(Color::Muted)
@@ -776,135 +681,10 @@ impl AgentConfiguration {
                 "Server is stopped.",
             ),
         };
-        let _is_remote = server_configuration
+        let is_remote = server_configuration
             .as_ref()
             .map(|config| matches!(config.as_ref(), ContextServerConfiguration::Http { .. }))
             .unwrap_or(false);
-        #[cfg(target_os = "macos")]
-        let context_server_configuration_menu = {
-            use gpui::{NativeMenuItem, show_native_popup_menu};
-
-            let fs = self.fs.clone();
-            let context_server_id_for_menu = context_server_id.clone();
-            let language_registry = self.language_registry.clone();
-            let workspace = self.workspace.clone();
-            let context_server_registry = self.context_server_registry.clone();
-
-            div()
-                .child(
-                    IconButton::new("context-server-config-menu", IconName::Settings)
-                        .icon_color(Color::Muted)
-                        .icon_size(IconSize::Small)
-                        .tooltip(Tooltip::text("Configure MCP Server")),
-                )
-                .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
-                    let mut items = vec![NativeMenuItem::action("Configure Server")];
-                    if tool_count > 0 {
-                        items.push(NativeMenuItem::action("View Tools"));
-                    }
-                    items.push(NativeMenuItem::Separator);
-                    items.push(NativeMenuItem::action("Uninstall"));
-
-                    let has_view_tools = tool_count > 0;
-                    let fs = fs.clone();
-                    let context_server_id = context_server_id_for_menu.clone();
-                    let language_registry = language_registry.clone();
-                    let workspace = workspace.clone();
-                    let context_server_registry = context_server_registry.clone();
-
-                    show_native_popup_menu(
-                        &items,
-                        event.position,
-                        window,
-                        cx,
-                        move |index, window, cx| {
-                            match (index, has_view_tools) {
-                                (0, _) => {
-                                    ConfigureContextServerModal::show_modal_for_existing_server(
-                                        context_server_id.clone(),
-                                        language_registry.clone(),
-                                        workspace.clone(),
-                                        window,
-                                        cx,
-                                    )
-                                    .detach();
-                                }
-                                (1, true) => {
-                                    workspace
-                                        .update(cx, |workspace, cx| {
-                                            ConfigureContextServerToolsModal::toggle(
-                                                context_server_id.clone(),
-                                                context_server_registry.clone(),
-                                                workspace,
-                                                window,
-                                                cx,
-                                            );
-                                        })
-                                        .ok();
-                                }
-                                _ => {
-                                    let uninstall_extension_task = match (
-                                        provided_by_extension,
-                                        resolve_extension_for_context_server(
-                                            &context_server_id,
-                                            cx,
-                                        ),
-                                    ) {
-                                        (true, Some((id, manifest))) => {
-                                            if extension_only_provides_context_server(
-                                                manifest.as_ref(),
-                                            ) {
-                                                ExtensionStore::global(cx).update(
-                                                    cx,
-                                                    |store, cx| {
-                                                        store.uninstall_extension(id, cx)
-                                                    },
-                                                )
-                                            } else {
-                                                workspace
-                                                    .update(cx, |workspace, cx| {
-                                                        show_unable_to_uninstall_extension_with_context_server(workspace, context_server_id.clone(), cx);
-                                                    })
-                                                    .log_err();
-                                                Task::ready(Ok(()))
-                                            }
-                                        }
-                                        _ => Task::ready(Ok(())),
-                                    };
-
-                                    cx.spawn({
-                                        let fs = fs.clone();
-                                        let context_server_id = context_server_id.clone();
-                                        async move |cx| {
-                                            uninstall_extension_task.await?;
-                                            cx.update(|cx| {
-                                                update_settings_file(
-                                                    fs.clone(),
-                                                    cx,
-                                                    {
-                                                        let context_server_id =
-                                                            context_server_id.clone();
-                                                        move |settings, _| {
-                                                            settings
-                                                                .project
-                                                                .context_servers
-                                                                .remove(&context_server_id.0);
-                                                        }
-                                                    },
-                                                )
-                                            });
-                                            anyhow::Ok(())
-                                        }
-                                    })
-                                    .detach_and_log_err(cx);
-                                }
-                            }
-                        },
-                    );
-                })
-        };
-
-        #[cfg(not(target_os = "macos"))]
         let context_server_configuration_menu = PopoverMenu::new("context-server-config-menu")
             .trigger_with_tooltip(
                 IconButton::new("context-server-config-menu", IconName::Settings)
@@ -1158,9 +938,6 @@ impl AgentConfiguration {
 
         let user_defined_agents = agent_server_store
             .external_agents()
-            .filter(|name| {
-                name.0 != GEMINI_NAME && name.0 != CLAUDE_AGENT_NAME && name.0 != CODEX_NAME
-            })
             .cloned()
             .collect::<Vec<_>>();
 
@@ -1178,79 +955,9 @@ impl AgentConfiguration {
                 let source = agent_server_store.agent_source(&name).unwrap_or_default();
                 (name, icon, display_name, source)
             })
+            .sorted_unstable_by_key(|(_, _, display_name, _)| display_name.to_lowercase())
             .collect();
 
-        #[cfg(target_os = "macos")]
-        let add_agent_popover = {
-            use gpui::{NativeMenuItem, show_native_popup_menu};
-
-            let trigger = Button::new("add-agent", "Add Agent")
-                .style(ButtonStyle::Outlined)
-                .icon_position(IconPosition::Start)
-                .icon(IconName::Plus)
-                .icon_size(IconSize::Small)
-                .icon_color(Color::Muted)
-                .label_size(LabelSize::Small);
-
-            div()
-                .child(trigger)
-                .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
-                    let items = vec![
-                        NativeMenuItem::action("Install from Registry"),
-                        NativeMenuItem::action("Add Custom Agent"),
-                        NativeMenuItem::Separator,
-                        NativeMenuItem::action("Learn More").enabled(false),
-                        NativeMenuItem::action("Agent Servers Docs"),
-                        NativeMenuItem::action("ACP Docs"),
-                    ];
-
-                    show_native_popup_menu(
-                        &items,
-                        event.position,
-                        window,
-                        cx,
-                        move |index, window, cx| match index {
-                            0 => {
-                                window
-                                    .dispatch_action(Box::new(zed_actions::AcpRegistry), cx);
-                            }
-                            1 => {
-                                if let Some(workspace) = window.root().flatten() {
-                                    let workspace = workspace.downgrade();
-                                    window
-                                        .spawn(cx, async |cx| {
-                                            open_new_agent_servers_entry_in_settings_editor(
-                                                workspace, cx,
-                                            )
-                                            .await
-                                        })
-                                        .detach_and_log_err(cx);
-                                }
-                            }
-                            // Index 2 is the disabled "Learn More" header
-                            3 => {
-                                window.dispatch_action(
-                                    Box::new(OpenBrowser {
-                                        url: zed_urls::agent_server_docs(cx),
-                                    }),
-                                    cx,
-                                );
-                            }
-                            4 => {
-                                window.dispatch_action(
-                                    Box::new(OpenBrowser {
-                                        url: "https://agentclientprotocol.com/".into(),
-                                    }),
-                                    cx,
-                                );
-                            }
-                            _ => {}
-                        },
-                    );
-                })
-        };
-
-        #[cfg(not(target_os = "macos"))]
         let add_agent_popover = PopoverMenu::new("add-agent-server-popover")
             .trigger(
                 Button::new("add-agent", "Add Agent")
@@ -1287,22 +994,6 @@ impl AgentConfiguration {
                         .separator()
                         .header("Learn More")
                         .item(
-                            ContextMenuEntry::new("Agent Servers Docs")
-                                .icon(IconName::ArrowUpRight)
-                                .icon_color(Color::Muted)
-                                .icon_position(IconPosition::End)
-                                .handler({
-                                    move |window, cx| {
-                                        window.dispatch_action(
-                                            Box::new(OpenBrowser {
-                                                url: zed_urls::agent_server_docs(cx),
-                                            }),
-                                            cx,
-                                        );
-                                    }
-                                }),
-                        )
-                        .item(
                             ContextMenuEntry::new("ACP Docs")
                                 .icon(IconName::ArrowUpRight)
                                 .icon_color(Color::Muted)
@@ -1337,51 +1028,24 @@ impl AgentConfiguration {
                         "All agents connected through the Agent Client Protocol.",
                         add_agent_popover.into_any_element(),
                     ))
-                    .child(
-                        v_flex()
-                            .p_4()
-                            .pt_0()
-                            .gap_2()
-                            .child(self.render_agent_server(
-                                AgentIcon::Name(IconName::AiClaude),
-                                "Claude Agent",
-                                "Claude Agent",
-                                ExternalAgentSource::Builtin,
+                    .child(v_flex().p_4().pt_0().gap_2().map(|mut parent| {
+                        let mut first = true;
+                        for (name, icon, display_name, source) in user_defined_agents {
+                            if !first {
+                                parent = parent
+                                    .child(Divider::horizontal().color(DividerColor::BorderFaded));
+                            }
+                            first = false;
+                            parent = parent.child(self.render_agent_server(
+                                icon,
+                                name,
+                                display_name,
+                                source,
                                 cx,
-                            ))
-                            .child(Divider::horizontal().color(DividerColor::BorderFaded))
-                            .child(self.render_agent_server(
-                                AgentIcon::Name(IconName::AiOpenAi),
-                                "Codex CLI",
-                                "Codex CLI",
-                                ExternalAgentSource::Builtin,
-                                cx,
-                            ))
-                            .child(Divider::horizontal().color(DividerColor::BorderFaded))
-                            .child(self.render_agent_server(
-                                AgentIcon::Name(IconName::AiGemini),
-                                "Gemini CLI",
-                                "Gemini CLI",
-                                ExternalAgentSource::Builtin,
-                                cx,
-                            ))
-                            .map(|mut parent| {
-                                for (name, icon, display_name, source) in user_defined_agents {
-                                    parent = parent
-                                        .child(
-                                            Divider::horizontal().color(DividerColor::BorderFaded),
-                                        )
-                                        .child(self.render_agent_server(
-                                            icon,
-                                            name,
-                                            display_name,
-                                            source,
-                                            cx,
-                                        ));
-                                }
-                                parent
-                            }),
-                    ),
+                            ));
+                        }
+                        parent
+                    })),
             )
     }
 
@@ -1422,7 +1086,7 @@ impl AgentConfiguration {
                 )),
                 IconName::AcpRegistry,
             )),
-            ExternalAgentSource::Builtin | ExternalAgentSource::Custom => None,
+            ExternalAgentSource::Custom => None,
         };
 
         let agent_server_name = ExternalAgentServerName(id.clone());
@@ -1464,19 +1128,19 @@ impl AgentConfiguration {
                             let Some(agent_servers) = settings.agent_servers.as_mut() else {
                                 return;
                             };
-                            if let Some(entry) = agent_servers.custom.get(agent_name.0.as_ref())
+                            if let Some(entry) = agent_servers.get(agent_name.0.as_ref())
                                 && matches!(
                                     entry,
                                     settings::CustomAgentServerSettings::Registry { .. }
                                 )
                             {
-                                agent_servers.custom.remove(agent_name.0.as_ref());
+                                agent_servers.remove(agent_name.0.as_ref());
                             }
                         });
                     })),
                 )
             }
-            ExternalAgentSource::Builtin | ExternalAgentSource::Custom => None,
+            ExternalAgentSource::Custom => None,
         };
 
         h_flex()
@@ -1655,29 +1319,23 @@ async fn open_new_agent_servers_entry_in_settings_editor(
                         !settings
                             .agent_servers
                             .as_ref()
-                            .is_some_and(|agent_servers| {
-                                agent_servers.custom.contains_key(name.as_str())
-                            })
+                            .is_some_and(|agent_servers| agent_servers.contains_key(name.as_str()))
                     });
                 if let Some(server_name) = server_name {
                     unique_server_name = Some(SharedString::from(server_name.clone()));
-                    settings
-                        .agent_servers
-                        .get_or_insert_default()
-                        .custom
-                        .insert(
-                            server_name,
-                            settings::CustomAgentServerSettings::Custom {
-                                path: "path_to_executable".into(),
-                                args: vec![],
-                                env: HashMap::default(),
-                                default_mode: None,
-                                default_model: None,
-                                favorite_models: vec![],
-                                default_config_options: Default::default(),
-                                favorite_config_option_values: Default::default(),
-                            },
-                        );
+                    settings.agent_servers.get_or_insert_default().insert(
+                        server_name,
+                        settings::CustomAgentServerSettings::Custom {
+                            path: "path_to_executable".into(),
+                            args: vec![],
+                            env: HashMap::default(),
+                            default_mode: None,
+                            default_model: None,
+                            favorite_models: vec![],
+                            default_config_options: Default::default(),
+                            favorite_config_option_values: Default::default(),
+                        },
+                    );
                 }
             });
 

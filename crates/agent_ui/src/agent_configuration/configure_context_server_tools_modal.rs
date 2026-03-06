@@ -93,7 +93,7 @@ impl ConfigureContextServerToolsModal {
                                         .pr_2()
                                         .w_full()
                                         .justify_between()
-                                        .theme_rounded_sm(cx)
+                                        .rounded_sm()
                                         .hover(|s| s.bg(cx.theme().colors().element_hover))
                                         .child(
                                             Label::new(tool_name.clone())

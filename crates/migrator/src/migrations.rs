@@ -301,3 +301,9 @@ pub(crate) mod m_2026_02_06 {
     pub(crate) use keymap::remove_legacy_symbol_search_bindings;
     pub(crate) use settings::remove_outline_panel_settings;
 }
+
+pub(crate) mod m_2026_02_25 {
+    mod settings;
+
+    pub(crate) use settings::migrate_builtin_agent_servers_to_registry;
+}

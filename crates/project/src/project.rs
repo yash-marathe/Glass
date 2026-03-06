@@ -2347,6 +2347,10 @@ impl Project {
         !self.is_local()
     }
 
+    pub fn is_via_collab(&self) -> bool {
+        false
+    }
+
     #[inline]
     pub fn is_via_wsl_with_host_interop(&self, cx: &App) -> bool {
         matches!(

@@ -10,7 +10,7 @@ use gpui::{
 };
 use language::{Language, LanguageRegistry};
 use markdown::{Markdown, MarkdownElement, MarkdownStyle};
-use toast::{StatusToast, ToastIcon};
+use notifications::status_toast::{StatusToast, ToastIcon};
 use project::{
     context_server_store::{
         ContextServerStatus, ContextServerStore, registry::ContextServerDescriptorRegistry,
@@ -651,7 +651,7 @@ impl ConfigureContextServerModal {
 
         div()
             .p_2()
-            .theme_rounded_md(cx)
+            .rounded_md()
             .border_1()
             .border_color(cx.theme().colors().border_variant)
             .bg(cx.theme().colors().editor_background)

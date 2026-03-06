@@ -5,7 +5,7 @@ use crate::{
 use anyhow::Result;
 use assistant_slash_command::{SlashCommand, SlashCommandOutputSection, SlashCommandWorkingSet};
 use assistant_slash_commands::{DefaultSlashCommand, FileSlashCommand, selections_creases};
-use client::zed_urls;
+use client::{proto, zed_urls};
 use collections::{BTreeSet, HashMap, HashSet, hash_map};
 use editor::{
     Anchor, Editor, EditorEvent, MenuEditPredictionsPolicy, MultiBuffer, MultiBufferOffset,
@@ -1035,7 +1035,7 @@ impl TextThreadEditor {
             .child("Press")
             .child(
                 h_flex()
-                    .theme_rounded_sm(cx)
+                    .rounded_sm()
                     .px_1()
                     .mr_0p5()
                     .border_1()
@@ -1495,7 +1495,7 @@ impl TextThreadEditor {
             return;
         };
 
-        // Get buffer info for the delegate call (even if empty, AcpThreadView ignores these
+        // Get buffer info for the delegate call (even if empty, ThreadView ignores these
         // params and calls insert_selections which handles both terminal and buffer)
         if let Some((selections, buffer)) = maybe!({
             let editor = workspace
@@ -2935,7 +2935,7 @@ fn invoked_slash_command_fold_placeholder(
                 .ml_6()
                 .gap_2()
                 .bg(cx.theme().colors().surface_background)
-                .theme_rounded_sm(cx)
+                .rounded_sm()
                 .child(Label::new(format!("/{}", command.name)))
                 .map(|parent| match &command.status {
                     InvokedSlashCommandStatus::Running(_) => {

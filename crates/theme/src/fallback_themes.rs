@@ -250,6 +250,24 @@ pub(crate) fn zed_default_dark() -> Theme {
                 version_control_word_deleted: WORD_DELETED_COLOR,
                 version_control_conflict_marker_ours: crate::green().light().step_12().alpha(0.5),
                 version_control_conflict_marker_theirs: crate::blue().light().step_12().alpha(0.5),
+
+                vim_normal_background: SystemColors::default().transparent,
+                vim_insert_background: SystemColors::default().transparent,
+                vim_replace_background: SystemColors::default().transparent,
+                vim_visual_background: SystemColors::default().transparent,
+                vim_visual_line_background: SystemColors::default().transparent,
+                vim_visual_block_background: SystemColors::default().transparent,
+                vim_yank_background: hsla(207.8 / 360., 81. / 100., 66. / 100., 0.2),
+                vim_helix_normal_background: SystemColors::default().transparent,
+                vim_helix_select_background: SystemColors::default().transparent,
+                vim_normal_foreground: SystemColors::default().transparent,
+                vim_insert_foreground: SystemColors::default().transparent,
+                vim_replace_foreground: SystemColors::default().transparent,
+                vim_visual_foreground: SystemColors::default().transparent,
+                vim_visual_line_foreground: SystemColors::default().transparent,
+                vim_visual_block_foreground: SystemColors::default().transparent,
+                vim_helix_normal_foreground: SystemColors::default().transparent,
+                vim_helix_select_foreground: SystemColors::default().transparent,
             },
             status: StatusColors {
                 conflict: yellow,
@@ -296,6 +314,7 @@ pub(crate) fn zed_default_dark() -> Theme {
                 warning_border: yellow,
             },
             player,
+            border_radius: ThemeBorderRadius::default(),
             syntax: Arc::new(SyntaxTheme {
                 highlights: vec![
                     ("attribute".into(), purple.into()),
@@ -360,7 +379,6 @@ pub(crate) fn zed_default_dark() -> Theme {
                     ("variant".into(), HighlightStyle::default()),
                 ],
             }),
-            border_radius: ThemeBorderRadius::default(),
         },
     }
 }

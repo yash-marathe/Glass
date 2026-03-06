@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use crate::acp::AcpThreadHistory;
+use crate::ThreadHistory;
 use acp_thread::{AgentSessionInfo, MentionUri};
 use anyhow::Result;
 use editor::{
@@ -206,7 +206,7 @@ pub struct PromptCompletionProvider<T: PromptCompletionProviderDelegate> {
     source: Arc<T>,
     editor: WeakEntity<Editor>,
     mention_set: Entity<MentionSet>,
-    history: WeakEntity<AcpThreadHistory>,
+    history: WeakEntity<ThreadHistory>,
     prompt_store: Option<Entity<PromptStore>>,
     workspace: WeakEntity<Workspace>,
 }
@@ -216,7 +216,7 @@ impl<T: PromptCompletionProviderDelegate> PromptCompletionProvider<T> {
         source: T,
         editor: WeakEntity<Editor>,
         mention_set: Entity<MentionSet>,
-        history: WeakEntity<AcpThreadHistory>,
+        history: WeakEntity<ThreadHistory>,
         prompt_store: Option<Entity<PromptStore>>,
         workspace: WeakEntity<Workspace>,
     ) -> Self {
@@ -1830,7 +1830,7 @@ pub(crate) fn search_symbols(
             .rsplit_once("::")
             .map_or(&*query, |(_, suffix)| suffix)
             .to_owned();
-        // Keep this filtering behavior aligned with any other project-symbol matching entry points.
+        // Note if you make changes to this filtering below, also change `project_symbols::ProjectSymbolsDelegate::filter`
         const MAX_MATCHES: usize = 100;
         let mut visible_matches = cx.foreground_executor().block_on(fuzzy::match_strings(
             &visible_match_candidates,

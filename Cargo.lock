@@ -421,7 +421,6 @@ dependencies = [
  "time",
  "time_format",
  "title_bar",
- "toast",
  "tree-sitter-md",
  "ui",
  "ui_input",
@@ -3629,6 +3628,7 @@ dependencies = [
 name = "crashes"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bincode",
  "cfg-if",
  "crash-handler",
@@ -8907,6 +8907,7 @@ dependencies = [
  "anyhow",
  "async-recursion",
  "collections",
+ "crashes",
  "editor",
  "fs",
  "gpui",
@@ -11192,6 +11193,7 @@ name = "platform_title_bar"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "project",
  "settings",
  "smallvec",
  "theme",

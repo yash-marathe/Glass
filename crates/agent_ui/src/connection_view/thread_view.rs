@@ -1,7 +1,5 @@
 use cloud_api_types::{SubmitAgentThreadFeedbackBody, SubmitAgentThreadFeedbackCommentsBody};
-#[cfg(not(target_os = "macos"))]
-use gpui::Corner;
-use gpui::List;
+use gpui::{Corner, List};
 use language_model::LanguageModelEffortLevel;
 use settings::update_settings_file;
 use ui::{ButtonLike, SplitButton, SplitButtonStyle, Tab};
@@ -188,13 +186,12 @@ impl DiffStats {
     }
 }
 
-pub struct AcpThreadView {
+pub struct ThreadView {
     pub id: acp::SessionId,
     pub parent_id: Option<acp::SessionId>,
-    pub login: Option<task::SpawnInTerminal>, // is some <=> Active | Unauthenticated
     pub thread: Entity<AcpThread>,
     pub(crate) conversation: Entity<super::Conversation>,
-    pub server_view: WeakEntity<AcpServerView>,
+    pub server_view: WeakEntity<ConnectionView>,
     pub agent_icon: IconName,
     pub agent_name: SharedString,
     pub focus_handle: FocusHandle,
@@ -203,7 +200,7 @@ pub struct AcpThreadView {
     pub title_editor: Entity<Editor>,
     pub config_options_view: Option<Entity<ConfigOptionsView>>,
     pub mode_selector: Option<Entity<ModeSelector>>,
-    pub model_selector: Option<Entity<AcpModelSelectorPopover>>,
+    pub model_selector: Option<Entity<ModelSelectorPopover>>,
     pub profile_selector: Option<Entity<ProfileSelector>>,
     pub permission_dropdown_handle: PopoverMenuHandle<ContextMenu>,
     pub thread_retry_status: Option<RetryStatus>,
@@ -255,10 +252,10 @@ pub struct AcpThreadView {
     pub recent_history_entries: Vec<AgentSessionInfo>,
     pub hovered_recent_history_item: Option<usize>,
     pub show_codex_windows_warning: bool,
-    pub history: Entity<AcpThreadHistory>,
+    pub history: Entity<ThreadHistory>,
     pub _history_subscription: Subscription,
 }
-impl Focusable for AcpThreadView {
+impl Focusable for ThreadView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         if self.parent_id.is_some() {
             self.focus_handle.clone()
@@ -278,13 +275,12 @@ pub struct TurnFields {
     pub turn_tokens: Option<u64>,
 }
 
-impl AcpThreadView {
+impl ThreadView {
     pub(crate) fn new(
         parent_id: Option<acp::SessionId>,
         thread: Entity<AcpThread>,
         conversation: Entity<super::Conversation>,
-        login: Option<task::SpawnInTerminal>,
-        server_view: WeakEntity<AcpServerView>,
+        server_view: WeakEntity<ConnectionView>,
         agent_icon: IconName,
         agent_name: SharedString,
         agent_display_name: SharedString,
@@ -292,7 +288,7 @@ impl AcpThreadView {
         entry_view_state: Entity<EntryViewState>,
         config_options_view: Option<Entity<ConfigOptionsView>>,
         mode_selector: Option<Entity<ModeSelector>>,
-        model_selector: Option<Entity<AcpModelSelectorPopover>>,
+        model_selector: Option<Entity<ModelSelectorPopover>>,
         profile_selector: Option<Entity<ProfileSelector>>,
         list_state: ListState,
         prompt_capabilities: Rc<RefCell<PromptCapabilities>>,
@@ -301,7 +297,7 @@ impl AcpThreadView {
         resume_thread_metadata: Option<AgentSessionInfo>,
         project: WeakEntity<Project>,
         thread_store: Option<Entity<ThreadStore>>,
-        history: Entity<AcpThreadHistory>,
+        history: Entity<ThreadHistory>,
         prompt_store: Option<Entity<PromptStore>>,
         initial_content: Option<AgentInitialContent>,
         mut subscriptions: Vec<Subscription>,
@@ -389,7 +385,6 @@ impl AcpThreadView {
             focus_handle: cx.focus_handle(),
             thread,
             conversation,
-            login,
             server_view,
             agent_icon,
             agent_name,
@@ -660,7 +655,7 @@ impl AcpThreadView {
         let text = text.trim();
         if text == "/login" || text == "/logout" {
             let connection = thread.read(cx).connection().clone();
-            let can_login = !connection.auth_methods().is_empty() || self.login.is_some();
+            let can_login = !connection.auth_methods().is_empty();
             // Does the agent have a specific logout command? Prefer that in case they need to reset internal state.
             let logout_supported = text == "/logout"
                 && self
@@ -676,7 +671,7 @@ impl AcpThreadView {
                     let agent_name = self.agent_name.clone();
                     let server_view = self.server_view.clone();
                     move |window, cx| {
-                        AcpServerView::handle_auth_required(
+                        ConnectionView::handle_auth_required(
                             server_view.clone(),
                             AuthRequired::new(),
                             agent_name,
@@ -835,7 +830,7 @@ impl AcpThreadView {
         cx.spawn(async move |this, cx| {
             if let Err(err) = task.await {
                 this.update(cx, |this, cx| {
-                    this.handle_any_thread_error(err, cx);
+                    this.handle_thread_error(err, cx);
                 })
                 .ok();
             } else {
@@ -893,12 +888,12 @@ impl AcpThreadView {
         .detach();
     }
 
-    pub(crate) fn handle_any_thread_error(&mut self, error: anyhow::Error, cx: &mut Context<Self>) {
-        let error = ThreadError::from_err(error, &self.agent_name);
-        self.handle_thread_error(error, cx);
-    }
-
-    pub(crate) fn handle_thread_error(&mut self, error: ThreadError, cx: &mut Context<Self>) {
+    pub(crate) fn handle_thread_error(
+        &mut self,
+        error: impl Into<ThreadError>,
+        cx: &mut Context<Self>,
+    ) {
+        let error = error.into();
         self.emit_thread_error_telemetry(&error, cx);
         self.thread_error = Some(error);
         cx.notify();
@@ -966,7 +961,7 @@ impl AcpThreadView {
 
             this.update(cx, |this, cx| {
                 if let Err(err) = result {
-                    this.handle_any_thread_error(err, cx);
+                    this.handle_thread_error(err, cx);
                 }
             })
         })
@@ -1509,7 +1504,7 @@ impl AcpThreadView {
     pub fn sync_thread(
         &mut self,
         project: Entity<Project>,
-        server_view: Entity<AcpServerView>,
+        server_view: Entity<ConnectionView>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1743,7 +1738,7 @@ impl AcpThreadView {
             .border_1()
             .border_b_0()
             .border_color(cx.theme().colors().border)
-            .theme_rounded_t_md(cx)
+            .rounded_t_md()
             .shadow(vec![gpui::BoxShadow {
                 color: gpui::black().opacity(0.15),
                 offset: point(px(1.), px(-1.)),
@@ -1885,7 +1880,7 @@ impl AcpThreadView {
                                     .cursor_pointer()
                                     .pr_0p5()
                                     .gap_0p5()
-                                    .theme_rounded_xs(cx)
+                                    .rounded_xs()
                                     .child(file_icon)
                                     .children(file_name)
                                     .children(file_path)
@@ -3033,7 +3028,7 @@ impl AcpThreadView {
         supported_effort_levels: Vec<LanguageModelEffortLevel>,
         selected_effort: Option<String>,
         cx: &Context<Self>,
-    ) -> AnyElement {
+    ) -> impl IntoElement {
         let weak_self = cx.weak_entity();
 
         let default_effort_level = supported_effort_levels
@@ -3097,86 +3092,6 @@ impl AcpThreadView {
             }
         });
 
-        #[cfg(target_os = "macos")]
-        {
-            use gpui::{NativeMenuItem, show_native_popup_menu};
-
-            let mut items = vec![NativeMenuItem::action("Change Thinking Effort").enabled(false)];
-            // Pad with an empty entry to account for the disabled header item,
-            // which still gets an action index in the native menu.
-            let mut effort_values: Vec<String> = vec![String::new()];
-
-            for effort_level in supported_effort_levels.clone() {
-                let is_selected = selected
-                    .as_ref()
-                    .is_some_and(|s| s.value == effort_level.value);
-                let title = if is_selected {
-                    format!("\u{2713} {}", effort_level.name)
-                } else {
-                    effort_level.name.to_string()
-                };
-                items.push(NativeMenuItem::action(SharedString::from(title)));
-                effort_values.push(effort_level.value.to_string());
-            }
-
-            let effort_values = std::rc::Rc::new(effort_values);
-            return div()
-                .child(
-                    ButtonLike::new_rounded_right("effort-selector-trigger")
-                        .selected_style(ButtonStyle::Tinted(TintColor::Accent))
-                        .child(Label::new(label).size(LabelSize::Small).color(label_color))
-                        .child(Icon::new(icon).size(IconSize::XSmall).color(Color::Muted))
-                        .tooltip(tooltip),
-                )
-                .on_mouse_down(gpui::MouseButton::Left, {
-                    move |event, window, cx| {
-                        let effort_values = effort_values.clone();
-                        let weak_self = weak_self.clone();
-                        show_native_popup_menu(
-                            &items,
-                            event.position,
-                            window,
-                            cx,
-                            move |index, _window, cx| {
-                                if let Some(effort) = effort_values.get(index) {
-                                    let effort = effort.clone();
-                                    weak_self
-                                        .update(cx, |this, cx| {
-                                            if let Some(thread) = this.as_native_thread(cx) {
-                                                thread.update(cx, |thread, cx| {
-                                                    thread.set_thinking_effort(
-                                                        Some(effort.to_string()),
-                                                        cx,
-                                                    );
-                                                    let fs =
-                                                        thread.project().read(cx).fs().clone();
-                                                    update_settings_file(
-                                                        fs,
-                                                        cx,
-                                                        move |settings, _| {
-                                                            if let Some(agent) =
-                                                                settings.agent.as_mut()
-                                                                && let Some(default_model) =
-                                                                    agent.default_model.as_mut()
-                                                            {
-                                                                default_model.effort =
-                                                                    Some(effort.to_string());
-                                                            }
-                                                        },
-                                                    );
-                                                });
-                                            }
-                                        })
-                                        .ok();
-                                }
-                            },
-                        );
-                    }
-                })
-                .into_any_element();
-        }
-
-        #[cfg(not(target_os = "macos"))]
         PopoverMenu::new("effort-selector")
             .trigger_with_tooltip(
                 ButtonLike::new_rounded_right("effort-selector-trigger")
@@ -3237,7 +3152,6 @@ impl AcpThreadView {
                 y: px(-2.0),
             })
             .anchor(Corner::BottomLeft)
-            .into_any_element()
     }
 
     fn render_send_button(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -3316,154 +3230,39 @@ impl AcpThreadView {
         }
     }
 
-    fn render_add_context_button(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_add_context_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let focus_handle = self.message_editor.focus_handle(cx);
+        let weak_self = cx.weak_entity();
 
-        #[cfg(target_os = "macos")]
-        {
-            use gpui::{NativeMenuItem, show_native_popup_menu};
-
-            let _weak_self = cx.weak_entity();
-            let message_editor = self.message_editor.clone();
-            let workspace = self.workspace.clone();
-            let supports_images = self.prompt_capabilities.borrow().image;
-
-            return div()
-                .child(
-                    IconButton::new("add-context", IconName::Plus)
-                        .icon_size(IconSize::Small)
-                        .icon_color(Color::Muted)
-                        .tooltip({
-                            let focus_handle = focus_handle.clone();
-                            move |_window, cx| {
-                                Tooltip::for_action_in(
-                                    "Add Context",
-                                    &OpenAddContextMenu,
-                                    &focus_handle,
-                                    cx,
-                                )
-                            }
-                        }),
-                )
-                .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
-                    let has_editor_selection = workspace
-                        .upgrade()
-                        .and_then(|ws| {
-                            ws.read(cx)
-                                .active_item(cx)
-                                .and_then(|item| item.downcast::<Editor>())
-                        })
-                        .is_some_and(|editor| {
-                            editor.update(cx, |editor, cx| {
-                                editor.has_non_empty_selection(&editor.display_snapshot(cx))
-                            })
-                        });
-                    let has_terminal_selection = workspace
-                        .upgrade()
-                        .and_then(|ws| ws.read(cx).panel::<TerminalPanel>(cx))
-                        .is_some_and(|panel| {
-                            !panel.read(cx).terminal_selections(cx).is_empty()
-                        });
-                    let has_selection = has_editor_selection || has_terminal_selection;
-
-                    let items = vec![
-                        NativeMenuItem::action("Context").enabled(false),
-                        NativeMenuItem::action("Files & Directories"),
-                        NativeMenuItem::action("Symbols"),
-                        NativeMenuItem::action("Threads"),
-                        NativeMenuItem::action("Rules"),
-                        NativeMenuItem::action("Image").enabled(supports_images),
-                        NativeMenuItem::action("Selection").enabled(has_selection),
-                    ];
-
-                    let me = message_editor.clone();
-                    show_native_popup_menu(
-                        &items,
-                        event.position,
-                        window,
-                        cx,
-                        move |index, window, cx| {
-                            // Index 0 is the disabled "Context" header
-                            match index {
-                                1 => {
-                                    me.focus_handle(cx).focus(window, cx);
-                                    me.update(cx, |editor, cx| {
-                                        editor.insert_context_type("file", window, cx);
-                                    });
-                                }
-                                2 => {
-                                    me.focus_handle(cx).focus(window, cx);
-                                    me.update(cx, |editor, cx| {
-                                        editor.insert_context_type("symbol", window, cx);
-                                    });
-                                }
-                                3 => {
-                                    me.focus_handle(cx).focus(window, cx);
-                                    me.update(cx, |editor, cx| {
-                                        editor.insert_context_type("thread", window, cx);
-                                    });
-                                }
-                                4 => {
-                                    me.focus_handle(cx).focus(window, cx);
-                                    me.update(cx, |editor, cx| {
-                                        editor.insert_context_type("rule", window, cx);
-                                    });
-                                }
-                                5 => {
-                                    me.focus_handle(cx).focus(window, cx);
-                                    me.update(cx, |editor, cx| {
-                                        editor.add_images_from_picker(window, cx);
-                                    });
-                                }
-                                6 => {
-                                    window.dispatch_action(
-                                        zed_actions::agent::AddSelectionToThread.boxed_clone(),
-                                        cx,
-                                    );
-                                }
-                                _ => {}
-                            }
-                        },
-                    );
-                })
-                .into_any_element();
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            let weak_self = cx.weak_entity();
-            PopoverMenu::new("add-context-menu")
-                .trigger_with_tooltip(
-                    IconButton::new("add-context", IconName::Plus)
-                        .icon_size(IconSize::Small)
-                        .icon_color(Color::Muted),
-                    {
-                        move |_window, cx| {
-                            Tooltip::for_action_in(
-                                "Add Context",
-                                &OpenAddContextMenu,
-                                &focus_handle,
-                                cx,
-                            )
-                        }
-                    },
-                )
-                .anchor(Corner::BottomLeft)
-                .with_handle(self.add_context_menu_handle.clone())
-                .offset(gpui::Point {
-                    x: px(0.0),
-                    y: px(-2.0),
-                })
-                .menu(move |window, cx| {
-                    weak_self
-                        .update(cx, |this, cx| this.build_add_context_menu(window, cx))
-                        .ok()
-                })
-                .into_any_element()
-        }
+        PopoverMenu::new("add-context-menu")
+            .trigger_with_tooltip(
+                IconButton::new("add-context", IconName::Plus)
+                    .icon_size(IconSize::Small)
+                    .icon_color(Color::Muted),
+                {
+                    move |_window, cx| {
+                        Tooltip::for_action_in(
+                            "Add Context",
+                            &OpenAddContextMenu,
+                            &focus_handle,
+                            cx,
+                        )
+                    }
+                },
+            )
+            .anchor(Corner::BottomLeft)
+            .with_handle(self.add_context_menu_handle.clone())
+            .offset(gpui::Point {
+                x: px(0.0),
+                y: px(-2.0),
+            })
+            .menu(move |window, cx| {
+                weak_self
+                    .update(cx, |this, cx| this.build_add_context_menu(window, cx))
+                    .ok()
+            })
     }
 
-    #[cfg(not(target_os = "macos"))]
     fn build_add_context_menu(
         &self,
         window: &mut Window,
@@ -3630,7 +3429,7 @@ impl AcpThreadView {
     }
 }
 
-impl AcpThreadView {
+impl ThreadView {
     pub(crate) fn render_entries(&mut self, cx: &mut Context<Self>) -> List {
         list(
             self.list_state.clone(),
@@ -3747,7 +3546,7 @@ impl AcpThreadView {
                                 div()
                                     .py_3()
                                     .px_2()
-                                    .theme_rounded_md(cx)
+                                    .rounded_md()
                                     .bg(cx.theme().colors().editor_background)
                                     .border_1()
                                     .when(is_indented, |this| {
@@ -3780,7 +3579,7 @@ impl AcpThreadView {
                                     .top_neg_3p5()
                                     .right_3()
                                     .gap_1()
-                                    .theme_rounded_sm(cx)
+                                    .rounded_sm()
                                     .border_1()
                                     .border_color(cx.theme().colors().border)
                                     .bg(cx.theme().colors().editor_background)
@@ -4037,7 +3836,7 @@ impl AcpThreadView {
             .mb_2()
             .mx_5()
             .gap_1()
-            .theme_rounded_md(cx)
+            .rounded_md()
             .border_1()
             .border_color(cx.theme().colors().border)
             .bg(cx.theme().colors().editor_background)
@@ -4540,19 +4339,17 @@ impl AcpThreadView {
         message_body: AnyElement,
         cx: &Context<Self>,
     ) -> AnyElement {
-        #[cfg(target_os = "macos")]
-        {
-            use gpui::{NativeMenuItem, show_native_popup_menu};
+        let entity = cx.entity();
+        let workspace = self.workspace.clone();
 
-            let entity = cx.entity();
-            let workspace = self.workspace.clone();
+        right_click_menu(format!("agent_context_menu-{}", entry_ix))
+            .trigger(move |_, _, _| message_body)
+            .menu(move |window, cx| {
+                let focus = window.focused(cx);
+                let entity = entity.clone();
+                let workspace = workspace.clone();
 
-            return div()
-                .child(message_body)
-                .on_mouse_down(gpui::MouseButton::Right, move |event, window, cx| {
-                    let entity = entity.clone();
-                    let workspace = workspace.clone();
-
+                ContextMenu::build(window, cx, move |menu, _, cx| {
                     let this = entity.read(cx);
                     let is_at_top = this.list_state.logical_scroll_top().item_ix == 0;
 
@@ -4576,36 +4373,10 @@ impl AcpThreadView {
                         })
                         .unwrap_or(false);
 
-                    let scroll_label = if is_at_top {
-                        "Scroll to Bottom"
-                    } else {
-                        "Scroll to Top"
-                    };
-
-                    let items = vec![
-                        NativeMenuItem::action("Copy Selection").enabled(has_selection),
-                        NativeMenuItem::action("Copy This Agent Response"),
-                        NativeMenuItem::separator(),
-                        NativeMenuItem::action(scroll_label),
-                        NativeMenuItem::action("Open Thread as Markdown"),
-                    ];
-
-                    show_native_popup_menu(
-                        &items,
-                        event.position,
-                        window,
-                        cx,
-                        move |index, window, cx| match index {
-                            0 => {
-                                if let Some(focus) = window.focused(cx) {
-                                    focus.dispatch_action(
-                                        &markdown::CopyAsMarkdown,
-                                        window,
-                                        cx,
-                                    );
-                                }
-                            }
-                            1 => {
+                    let copy_this_agent_response =
+                        ContextMenuEntry::new("Copy This Agent Response").handler({
+                            let entity = entity.clone();
+                            move |_, cx| {
                                 entity.update(cx, |this, cx| {
                                     let entries = this.thread.read(cx).entries();
                                     if let Some(text) =
@@ -4615,18 +4386,33 @@ impl AcpThreadView {
                                     }
                                 });
                             }
-                            2 => {
-                                if is_at_top {
-                                    entity.update(cx, |this, cx| {
-                                        this.scroll_to_bottom(cx);
-                                    });
-                                } else {
-                                    entity.update(cx, |this, cx| {
-                                        this.scroll_to_top(cx);
-                                    });
-                                }
+                        });
+
+                    let scroll_item = if is_at_top {
+                        ContextMenuEntry::new("Scroll to Bottom").handler({
+                            let entity = entity.clone();
+                            move |_, cx| {
+                                entity.update(cx, |this, cx| {
+                                    this.scroll_to_bottom(cx);
+                                });
                             }
-                            3 => {
+                        })
+                    } else {
+                        ContextMenuEntry::new("Scroll to Top").handler({
+                            let entity = entity.clone();
+                            move |_, cx| {
+                                entity.update(cx, |this, cx| {
+                                    this.scroll_to_top(cx);
+                                });
+                            }
+                        })
+                    };
+
+                    let open_thread_as_markdown = ContextMenuEntry::new("Open Thread as Markdown")
+                        .handler({
+                            let entity = entity.clone();
+                            let workspace = workspace.clone();
+                            move |window, cx| {
                                 if let Some(workspace) = workspace.upgrade() {
                                     entity
                                         .update(cx, |this, cx| {
@@ -4635,119 +4421,21 @@ impl AcpThreadView {
                                         .detach_and_log_err(cx);
                                 }
                             }
-                            _ => {}
-                        },
-                    );
+                        });
+
+                    menu.when_some(focus, |menu, focus| menu.context(focus))
+                        .action_disabled_when(
+                            !has_selection,
+                            "Copy Selection",
+                            Box::new(markdown::CopyAsMarkdown),
+                        )
+                        .item(copy_this_agent_response)
+                        .separator()
+                        .item(scroll_item)
+                        .item(open_thread_as_markdown)
                 })
-                .into_any_element();
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            let entity = cx.entity();
-            let workspace = self.workspace.clone();
-
-            right_click_menu(format!("agent_context_menu-{}", entry_ix))
-                .trigger(move |_, _, _| message_body)
-                .menu(move |window, cx| {
-                    let focus = window.focused(cx);
-                    let entity = entity.clone();
-                    let workspace = workspace.clone();
-
-                    ContextMenu::build(window, cx, move |menu, _, cx| {
-                        let this = entity.read(cx);
-                        let is_at_top = this.list_state.logical_scroll_top().item_ix == 0;
-
-                        let has_selection = this
-                            .thread
-                            .read(cx)
-                            .entries()
-                            .get(entry_ix)
-                            .and_then(|entry| match &entry {
-                                AgentThreadEntry::AssistantMessage(msg) => Some(&msg.chunks),
-                                _ => None,
-                            })
-                            .map(|chunks| {
-                                chunks.iter().any(|chunk| {
-                                    let md = match chunk {
-                                        AssistantMessageChunk::Message { block } => {
-                                            block.markdown()
-                                        }
-                                        AssistantMessageChunk::Thought { block } => {
-                                            block.markdown()
-                                        }
-                                    };
-                                    md.map_or(false, |m| m.read(cx).selected_text().is_some())
-                                })
-                            })
-                            .unwrap_or(false);
-
-                        let copy_this_agent_response =
-                            ContextMenuEntry::new("Copy This Agent Response").handler({
-                                let entity = entity.clone();
-                                move |_, cx| {
-                                    entity.update(cx, |this, cx| {
-                                        let entries = this.thread.read(cx).entries();
-                                        if let Some(text) =
-                                            Self::get_agent_message_content(entries, entry_ix, cx)
-                                        {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(text));
-                                        }
-                                    });
-                                }
-                            });
-
-                        let scroll_item = if is_at_top {
-                            ContextMenuEntry::new("Scroll to Bottom").handler({
-                                let entity = entity.clone();
-                                move |_, cx| {
-                                    entity.update(cx, |this, cx| {
-                                        this.scroll_to_bottom(cx);
-                                    });
-                                }
-                            })
-                        } else {
-                            ContextMenuEntry::new("Scroll to Top").handler({
-                                let entity = entity.clone();
-                                move |_, cx| {
-                                    entity.update(cx, |this, cx| {
-                                        this.scroll_to_top(cx);
-                                    });
-                                }
-                            })
-                        };
-
-                        let open_thread_as_markdown =
-                            ContextMenuEntry::new("Open Thread as Markdown").handler({
-                                let entity = entity.clone();
-                                let workspace = workspace.clone();
-                                move |window, cx| {
-                                    if let Some(workspace) = workspace.upgrade() {
-                                        entity
-                                            .update(cx, |this, cx| {
-                                                this.open_thread_as_markdown(
-                                                    workspace, window, cx,
-                                                )
-                                            })
-                                            .detach_and_log_err(cx);
-                                    }
-                                }
-                            });
-
-                        menu.when_some(focus, |menu, focus| menu.context(focus))
-                            .action_disabled_when(
-                                !has_selection,
-                                "Copy Selection",
-                                Box::new(markdown::CopyAsMarkdown),
-                            )
-                            .item(copy_this_agent_response)
-                            .separator()
-                            .item(scroll_item)
-                            .item(open_thread_as_markdown)
-                    })
-                })
-                .into_any_element()
-        }
+            })
+            .into_any_element()
     }
 
     fn get_agent_message_content(
@@ -4931,7 +4619,7 @@ impl AcpThreadView {
             .flex_none()
             .gap_1()
             .justify_between()
-            .theme_rounded_t_md(cx)
+            .rounded_t_md()
             .child(
                 div()
                     .id(("command-target-path", terminal.entity_id()))
@@ -5081,7 +4769,7 @@ impl AcpThreadView {
             .border_1()
             .when(tool_failed || command_failed, |card| card.border_dashed())
             .border_color(border_color)
-            .theme_rounded_md(cx)
+            .rounded_md()
             .overflow_hidden()
             .child(
                 v_flex()
@@ -5099,7 +4787,7 @@ impl AcpThreadView {
                         .when(tool_failed || command_failed, |card| card.border_dashed())
                         .border_color(border_color)
                         .bg(cx.theme().colors().editor_background)
-                        .theme_rounded_b_md(cx)
+                        .rounded_b_md()
                         .text_ui_sm(cx)
                         .h_full()
                         .children(terminal_view.map(|terminal_view| {
@@ -5301,7 +4989,7 @@ impl AcpThreadView {
                                         .pl_0p5()
                                         .gap_1()
                                         .justify_between()
-                                        .theme_rounded_xs(cx)
+                                        .rounded_xs()
                                         .hover(|s| s.bg(cx.theme().colors().element_hover))
                                         .child(input_output_header(input_header.into()))
                                         .child(
@@ -5421,7 +5109,7 @@ impl AcpThreadView {
             .map(|this| {
                 if use_card_layout {
                     this.my_1p5()
-                        .theme_rounded_md(cx)
+                        .rounded_md()
                         .border_1()
                         .when(failed_or_canceled, |this| this.border_dashed())
                         .border_color(self.tool_card_border_color(cx))
@@ -5468,7 +5156,7 @@ impl AcpThreadView {
                             ))
                             .when(is_collapsible || failed_or_canceled, |this| {
                                 let diff_for_discard =
-                                    if has_revealed_diff && is_cancelled_edit {
+                                    if has_revealed_diff && is_cancelled_edit && cx.has_flag::<AgentV2FeatureFlag>() {
                                         tool_call.diffs().next().cloned()
                                     } else {
                                         None
@@ -5740,69 +5428,8 @@ impl AcpThreadView {
             .map(|(i, choice)| (i, choice.label()))
             .collect();
 
-        let _permission_dropdown_handle = self.permission_dropdown_handle.clone();
+        let permission_dropdown_handle = self.permission_dropdown_handle.clone();
 
-        #[cfg(target_os = "macos")]
-        {
-            use gpui::{NativeMenuItem, show_native_popup_menu};
-
-            let items: Vec<NativeMenuItem> = menu_options
-                .iter()
-                .map(|(i, name)| {
-                    let title = if *i == selected_index {
-                        format!("\u{2713} {}", name)
-                    } else {
-                        name.to_string()
-                    };
-                    NativeMenuItem::action(SharedString::from(title))
-                })
-                .collect();
-
-            let options_rc = std::rc::Rc::new(menu_options);
-            return div()
-                .child(
-                    Button::new(("granularity-trigger", entry_ix), current_label)
-                        .icon(IconName::ChevronDown)
-                        .icon_size(IconSize::XSmall)
-                        .icon_color(Color::Muted)
-                        .label_size(LabelSize::Small)
-                        .when(is_first, |this| {
-                            this.key_binding(
-                                KeyBinding::for_action_in(
-                                    &crate::OpenPermissionDropdown as &dyn Action,
-                                    &self.focus_handle(cx),
-                                    cx,
-                                )
-                                .map(|kb| kb.size(rems_from_px(10.))),
-                            )
-                        }),
-                )
-                .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
-                    let tool_call_id = tool_call_id.clone();
-                    let options = options_rc.clone();
-                    show_native_popup_menu(
-                        &items,
-                        event.position,
-                        window,
-                        cx,
-                        move |index, window, cx| {
-                            if let Some((original_index, _)) = options.get(index) {
-                                window.dispatch_action(
-                                    SelectPermissionGranularity {
-                                        tool_call_id: tool_call_id.0.to_string(),
-                                        index: *original_index,
-                                    }
-                                    .boxed_clone(),
-                                    cx,
-                                );
-                            }
-                        },
-                    );
-                })
-                .into_any_element();
-        }
-
-        #[cfg(not(target_os = "macos"))]
         PopoverMenu::new(("permission-granularity", entry_ix))
             .with_handle(permission_dropdown_handle)
             .trigger(
@@ -5966,7 +5593,7 @@ impl AcpThreadView {
         v_flex()
             .p_3()
             .gap_1()
-            .theme_rounded_b_md(cx)
+            .rounded_b_md()
             .bg(cx.theme().colors().editor_background)
             .child(bar(0, "w_4_5"))
             .child(bar(1, "w_1_4"))
@@ -6503,7 +6130,7 @@ impl AcpThreadView {
         &self,
         active_session_id: &acp::SessionId,
         entry_ix: usize,
-        thread_view: Option<&Entity<AcpThreadView>>,
+        thread_view: Option<&Entity<ThreadView>>,
         tool_call: &ToolCall,
         focus_handle: &FocusHandle,
         window: &Window,
@@ -6581,7 +6208,7 @@ impl AcpThreadView {
 
         v_flex()
             .w_full()
-            .theme_rounded_md(cx)
+            .rounded_md()
             .border_1()
             .when(has_no_title_or_canceled, |this| this.border_dashed())
             .border_color(self.tool_card_border_color(cx))
@@ -6604,7 +6231,7 @@ impl AcpThreadView {
                             .size_full()
                             .gap_2()
                             .justify_between()
-                            .theme_rounded_sm(cx)
+                            .rounded_sm()
                             .overflow_hidden()
                             .child(
                                 h_flex()
@@ -6773,7 +6400,7 @@ impl AcpThreadView {
         &self,
         active_session_id: &acp::SessionId,
         entry_ix: usize,
-        thread_view: &Entity<AcpThreadView>,
+        thread_view: &Entity<ThreadView>,
         is_running: bool,
         tool_call: &ToolCall,
         focus_handle: &FocusHandle,
@@ -7107,7 +6734,7 @@ impl AcpThreadView {
                     }
                     let connection = this.thread.read(cx).connection().clone();
                     window.defer(cx, |window, cx| {
-                        AcpServerView::handle_auth_required(
+                        ConnectionView::handle_auth_required(
                             server_view,
                             AuthRequired::new(),
                             agent_name,
@@ -7226,7 +6853,7 @@ impl AcpThreadView {
 
     fn update_recent_history_from_cache(
         &mut self,
-        history: &Entity<AcpThreadHistory>,
+        history: &Entity<ThreadHistory>,
         cx: &mut Context<Self>,
     ) {
         self.recent_history_entries = history.read(cx).get_recent_sessions(3);
@@ -7299,7 +6926,7 @@ impl AcpThreadView {
                                     // TODO: Add keyboard navigation.
                                     let is_hovered =
                                         self.hovered_recent_history_item == Some(index);
-                                    crate::acp::thread_history::AcpHistoryEntryElement::new(
+                                    crate::thread_history::HistoryEntryElement::new(
                                         entry,
                                         self.server_view.clone(),
                                     )
@@ -7521,7 +7148,7 @@ impl AcpThreadView {
     }
 }
 
-impl Render for AcpThreadView {
+impl Render for ThreadView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let has_messages = self.list_state.item_count() > 0;
 

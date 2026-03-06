@@ -549,7 +549,7 @@ impl MentionSet {
         );
         let connection = server.connect(delegate, cx);
         cx.spawn(async move |_, cx| {
-            let (agent, _) = connection.await?;
+            let agent = connection.await?;
             let agent = agent.downcast::<agent::NativeAgentConnection>().unwrap();
             let summary = agent
                 .0
@@ -1102,7 +1102,7 @@ impl Render for ImageHover {
             div()
                 .p_1p5()
                 .elevation_2(cx)
-                .child(gpui::img(image).h_auto().max_w_96().theme_rounded_sm(cx))
+                .child(gpui::img(image).h_auto().max_w_96().rounded_sm())
                 .into_any_element()
         } else {
             gpui::Empty.into_any_element()

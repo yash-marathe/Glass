@@ -1,8 +1,8 @@
-use client::zed_urls;
 use gpui::{
     ClickEvent, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, MouseDownEvent, Render,
     linear_color_stop, linear_gradient,
 };
+use project::agent_server_store::CLAUDE_AGENT_NAME;
 use ui::{TintColor, Vector, VectorName, prelude::*};
 use workspace::{ModalView, Workspace};
 
@@ -37,7 +37,13 @@ impl ClaudeCodeOnboardingModal {
 
             if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
                 panel.update(cx, |panel, cx| {
-                    panel.new_agent_thread(AgentType::ClaudeAgent, window, cx);
+                    panel.new_agent_thread(
+                        AgentType::Custom {
+                            name: CLAUDE_AGENT_NAME.into(),
+                        },
+                        window,
+                        cx,
+                    );
                 });
             }
         });
@@ -47,8 +53,8 @@ impl ClaudeCodeOnboardingModal {
         claude_agent_onboarding_event!("Open Panel Clicked");
     }
 
-    fn view_docs(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        cx.open_url(&zed_urls::external_agents_docs(cx));
+    fn view_docs(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        window.dispatch_action(Box::new(zed_actions::AcpRegistry), cx);
         cx.notify();
 
         claude_agent_onboarding_event!("Documentation Link Clicked");
@@ -76,7 +82,7 @@ impl Render for ClaudeCodeOnboardingModal {
                 .px_1()
                 .py_0p5()
                 .gap_1()
-                .theme_rounded_sm(cx)
+                .rounded_sm()
                 .bg(cx.theme().colors().element_active.opacity(0.05))
                 .border_1()
                 .border_color(cx.theme().colors().border)
@@ -114,7 +120,7 @@ impl Render for ClaudeCodeOnboardingModal {
             .border_color(cx.theme().colors().border_variant)
             .justify_center()
             .gap_8()
-            .theme_rounded_t_md(cx)
+            .rounded_t_md()
             .overflow_hidden()
             .child(
                 div().absolute().inset_0().w(px(515.)).h(px(126.)).child(
@@ -163,7 +169,7 @@ impl Render for ClaudeCodeOnboardingModal {
                             .pr_2()
                             .py_0p5()
                             .gap_1()
-                            .theme_rounded_sm(cx)
+                            .rounded_sm()
                             .bg(cx.theme().colors().element_active.opacity(0.2))
                             .border_1()
                             .border_color(cx.theme().colors().border)

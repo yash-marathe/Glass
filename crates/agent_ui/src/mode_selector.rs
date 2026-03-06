@@ -1,30 +1,22 @@
 use acp_thread::AgentSessionModes;
 use agent_client_protocol as acp;
 use agent_servers::AgentServer;
-use fs::Fs;
-use gpui::{Context, WeakEntity, Window, prelude::*};
-use std::{rc::Rc, sync::Arc};
-use ui::{Button, ContextMenu, PopoverMenuHandle, Tooltip, prelude::*};
-
-use crate::ToggleProfileSelector;
-
-#[cfg(not(target_os = "macos"))]
 use agent_settings::AgentSettings;
-#[cfg(not(target_os = "macos"))]
-use gpui::Entity;
-#[cfg(not(target_os = "macos"))]
+use fs::Fs;
+use gpui::{Context, Entity, WeakEntity, Window, prelude::*};
 use settings::Settings as _;
-#[cfg(not(target_os = "macos"))]
-use ui::{ContextMenuEntry, DocumentationSide, KeyBinding, PopoverMenu};
-#[cfg(not(target_os = "macos"))]
-use crate::{CycleModeSelector, ui::HoldForDefault};
+use std::{rc::Rc, sync::Arc};
+use ui::{
+    Button, ContextMenu, ContextMenuEntry, DocumentationSide, KeyBinding, PopoverMenu,
+    PopoverMenuHandle, Tooltip, prelude::*,
+};
+
+use crate::{CycleModeSelector, ToggleProfileSelector, ui::HoldForDefault};
 
 pub struct ModeSelector {
     connection: Rc<dyn AgentSessionModes>,
-    #[cfg(not(target_os = "macos"))]
     agent_server: Rc<dyn AgentServer>,
     menu_handle: PopoverMenuHandle<ContextMenu>,
-    #[cfg(not(target_os = "macos"))]
     fs: Arc<dyn Fs>,
     setting_mode: bool,
 }
@@ -35,15 +27,10 @@ impl ModeSelector {
         agent_server: Rc<dyn AgentServer>,
         fs: Arc<dyn Fs>,
     ) -> Self {
-        #[cfg(target_os = "macos")]
-        let _ = (&agent_server, &fs);
-
         Self {
             connection: session_modes,
-            #[cfg(not(target_os = "macos"))]
             agent_server,
             menu_handle: PopoverMenuHandle::default(),
-            #[cfg(not(target_os = "macos"))]
             fs,
             setting_mode: false,
         }
@@ -88,7 +75,6 @@ impl ModeSelector {
         .detach();
     }
 
-    #[cfg(not(target_os = "macos"))]
     fn build_context_menu(
         &self,
         window: &mut Window,
@@ -189,55 +175,6 @@ impl Render for ModeSelector {
             .icon_color(Color::Muted)
             .disabled(self.setting_mode);
 
-        #[cfg(target_os = "macos")]
-        {
-            use gpui::{NativeMenuItem, show_native_popup_menu};
-
-            let all_modes = self.connection.all_modes();
-            let current_mode = self.connection.current_mode();
-
-            let mut items = Vec::new();
-            let mut mode_ids: Vec<acp::SessionModeId> = Vec::new();
-
-            for mode in &all_modes {
-                let is_selected = mode.id == current_mode;
-                let title = if is_selected {
-                    format!("\u{2713} {}", mode.name)
-                } else {
-                    mode.name.to_string()
-                };
-                items.push(NativeMenuItem::action(SharedString::from(title)));
-                mode_ids.push(mode.id.clone());
-            }
-
-            let mode_ids = std::rc::Rc::new(mode_ids);
-            return div()
-                .child(trigger_button.tooltip(move |_window, cx| {
-                    Tooltip::for_action("Change Mode", &ToggleProfileSelector, cx)
-                }))
-                .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
-                    let mode_ids = mode_ids.clone();
-                    let this = this.clone();
-                    show_native_popup_menu(
-                        &items,
-                        event.position,
-                        window,
-                        cx,
-                        move |index, _window, cx| {
-                            if let Some(mode_id) = mode_ids.get(index) {
-                                let mode_id = mode_id.clone();
-                                this.update(cx, |this, cx| {
-                                    this.set_mode(mode_id, cx);
-                                })
-                                .ok();
-                            }
-                        },
-                    );
-                })
-                .into_any_element();
-        }
-
-        #[cfg(not(target_os = "macos"))]
         PopoverMenu::new("mode-selector")
             .trigger_with_tooltip(
                 trigger_button,
@@ -276,6 +213,5 @@ impl Render for ModeSelector {
                 this.update(cx, |this, cx| this.build_context_menu(window, cx))
                     .ok()
             })
-            .into_any_element()
     }
 }
