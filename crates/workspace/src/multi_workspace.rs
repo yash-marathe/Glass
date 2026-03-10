@@ -2,9 +2,9 @@ use anyhow::Result;
 #[cfg(target_os = "macos")]
 use gpui::native_sidebar;
 use gpui::{
-    AnyView, App, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable, ManagedView,
-    Pixels, Render, Subscription, Task, Tiling, Window, WindowBackgroundAppearance, WindowId,
-    actions,
+    AnyView, App, Context, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
+    ManagedView, MouseButton, Pixels, Render, Subscription, Task, Tiling, Window,
+    WindowBackgroundAppearance, WindowId, actions, deferred, px,
 };
 use project::{DisableAiSettings, Project};
 use settings::Settings;
@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use theme::ActiveTheme;
 use ui::prelude::*;
 use util::ResultExt;
+
+const SIDEBAR_RESIZE_HANDLE_SIZE: Pixels = px(6.0);
 
 use crate::{
     CloseIntent, CloseWindow, DockPosition, Event as WorkspaceEvent, Item, ModalView, Panel, Toast,
