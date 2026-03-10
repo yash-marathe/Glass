@@ -130,7 +130,7 @@ impl AgentTool for SpawnAgentTool {
                 Ok((subagent, subagent_session_id))
             })?;
 
-            match subagent.send(input.message, cx).await {
+            match subagent.run_turn(input.message, cx).await {
                 Ok(output) => {
                     event_stream.update_fields(
                         acp::ToolCallUpdateFields::new().content(vec![output.clone().into()]),
