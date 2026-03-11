@@ -148,6 +148,7 @@ pub enum IconName {
     GitBranchPlus,
     GitCommit,
     GitGraph,
+    GitMergeConflict,
     Github,
     Hash,
     HistoryRerun,
