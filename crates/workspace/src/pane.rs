@@ -7922,7 +7922,7 @@ mod tests {
         let scroll_handle =
             pane.update_in(cx, |pane, _window, _cx| pane.tab_bar_scroll_handle.clone());
         assert!(
-            scroll_handle.max_offset().width > px(0.),
+            scroll_handle.max_offset().x > px(0.),
             "Test requires tab overflow to verify scrolling. Increase tab count or reduce window width."
         );
 

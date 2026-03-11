@@ -17,7 +17,6 @@ test-support = [
     "gpui/test-support",
     "gpui/screen-capture",
     "dep:image",
-    "dep:semver",
     "workspace/test-support",
     "project/test-support",
     "editor/test-support",
@@ -31,7 +30,6 @@ visual-tests = [
     "gpui/test-support",
     "gpui/screen-capture",
     "dep:image",
-    "dep:semver",
     "dep:tempfile",
     "dep:action_log",
     "dep:agent_servers",
@@ -75,7 +73,6 @@ assets.workspace = true
 audio.workspace = true
 auto_update.workspace = true
 auto_update_ui.workspace = true
-bincode.workspace = true
 breadcrumbs.workspace = true
 browser.workspace = true
 chrono.workspace = true
@@ -126,7 +123,7 @@ gpui = { workspace = true, features = [
 ] }
 gpui_platform.workspace = true
 image = { workspace = true, optional = true }
-semver = { workspace = true, optional = true }
+semver.workspace = true
 tempfile = { workspace = true, optional = true }
 clock = { workspace = true, optional = true }
 acp_thread.workspace = true
