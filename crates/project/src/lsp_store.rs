@@ -547,6 +547,7 @@ impl LocalLspStore {
                     let mut initialization_options = Self::initialization_options_for_adapter(
                         adapter.adapter.clone(),
                         &delegate,
+                        cx,
                     )
                     .await?;
 
@@ -3770,9 +3771,10 @@ impl LocalLspStore {
     async fn initialization_options_for_adapter(
         adapter: Arc<dyn LspAdapter>,
         delegate: &Arc<dyn LspAdapterDelegate>,
+        cx: &mut AsyncApp,
     ) -> Result<Option<serde_json::Value>> {
         let Some(mut initialization_config) =
-            adapter.clone().initialization_options(delegate).await?
+            adapter.clone().initialization_options(delegate, cx).await?
         else {
             return Ok(None);
         };
@@ -13926,6 +13928,7 @@ impl LspAdapter for SshLspAdapter {
     async fn initialization_options(
         self: Arc<Self>,
         _: &Arc<dyn LspAdapterDelegate>,
+        _: &mut AsyncApp,
     ) -> Result<Option<serde_json::Value>> {
         let Some(options) = &self.initialization_options else {
             return Ok(None);

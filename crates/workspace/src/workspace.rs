@@ -2833,13 +2833,15 @@ impl Workspace {
                     .spawn(cx, async move |cx| {
                         // limit to 100 keystrokes to avoid infinite recursion.
                         for _ in 0..100 {
-                            let mut state = keystrokes.borrow_mut();
-                            let Some(keystroke) = state.queue.pop_front() else {
-                                state.dispatched.clear();
-                                state.task.take();
-                                return;
+                            let keystroke = {
+                                let mut state = keystrokes.borrow_mut();
+                                let Some(keystroke) = state.queue.pop_front() else {
+                                    state.dispatched.clear();
+                                    state.task.take();
+                                    return;
+                                };
+                                keystroke
                             };
-                            drop(state);
                             cx.update(|window, cx| {
                                 let focused = window.focused(cx);
                                 window.dispatch_keystroke(keystroke.clone(), cx);
@@ -2854,6 +2856,10 @@ impl Workspace {
                                 }
                             })
                             .ok();
+
+                            // Yield between synthetic keystrokes so deferred focus and
+                            // other effects can settle before dispatching the next key.
+                            yield_now().await;
                         }
 
                         *keystrokes.borrow_mut() = Default::default();
