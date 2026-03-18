@@ -2,8 +2,9 @@ use anyhow::Result;
 #[cfg(target_os = "macos")]
 use gpui::native_sidebar;
 use gpui::{
-    App, Context, Entity, EntityId, EventEmitter, Focusable, ManagedView, Pixels, Render,
-    Subscription, Task, Tiling, Window, WindowBackgroundAppearance, WindowId, actions, px,
+    AnyView, App, Context, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
+    ManagedView, MouseButton, Pixels, Render, Subscription, Task, Tiling, Window,
+    WindowBackgroundAppearance, WindowId, actions, deferred, px,
 };
 use project::Project;
 use std::future::Future;
@@ -18,7 +19,6 @@ pub const SIDEBAR_RESIZE_HANDLE_SIZE: Pixels = px(6.0);
 use crate::{
     CloseIntent, CloseWindow, DockPosition, Event as WorkspaceEvent, Item, ModalView, Panel, Toast,
     UnifiedSidebar, Workspace, WorkspaceId, client_side_decorations, notifications::NotificationId,
-    persistence::model::MultiWorkspaceId,
 };
 
 actions!(
@@ -43,6 +43,22 @@ pub enum MultiWorkspaceEvent {
     WorkspaceRemoved(EntityId),
 }
 
+pub trait Sidebar: Focusable + Render + Sized {
+    fn width(&self, cx: &App) -> Pixels;
+    fn set_width(&mut self, width: Option<Pixels>, cx: &mut Context<Self>);
+    fn has_notifications(&self, cx: &App) -> bool;
+}
+
+pub trait SidebarHandle: 'static + Send + Sync {
+    fn width(&self, cx: &App) -> Pixels;
+    fn set_width(&self, width: Option<Pixels>, cx: &mut App);
+    fn focus_handle(&self, cx: &App) -> FocusHandle;
+    fn focus(&self, window: &mut Window, cx: &mut App);
+    fn has_notifications(&self, cx: &App) -> bool;
+    fn to_any(&self) -> AnyView;
+    fn entity_id(&self) -> EntityId;
+}
+
 #[derive(Clone)]
 pub struct DraggedSidebar;
 
@@ -52,11 +68,42 @@ impl Render for DraggedSidebar {
     }
 }
 
+impl<T: Sidebar> SidebarHandle for Entity<T> {
+    fn width(&self, cx: &App) -> Pixels {
+        self.read(cx).width(cx)
+    }
+
+    fn set_width(&self, width: Option<Pixels>, cx: &mut App) {
+        self.update(cx, |this, cx| this.set_width(width, cx))
+    }
+
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.read(cx).focus_handle(cx)
+    }
+
+    fn focus(&self, window: &mut Window, cx: &mut App) {
+        let handle = self.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+    }
+
+    fn has_notifications(&self, cx: &App) -> bool {
+        self.read(cx).has_notifications(cx)
+    }
+
+    fn to_any(&self) -> AnyView {
+        self.clone().into()
+    }
+
+    fn entity_id(&self) -> EntityId {
+        Entity::entity_id(self)
+    }
+}
+
 pub struct MultiWorkspace {
     window_id: WindowId,
     workspaces: Vec<Entity<Workspace>>,
-    database_id: Option<MultiWorkspaceId>,
     active_workspace_index: usize,
+    sidebar: Option<Box<dyn SidebarHandle>>,
     #[cfg(target_os = "macos")]
     unified_sidebar: Entity<UnifiedSidebar>,
     sidebar_open: bool,
@@ -104,8 +151,8 @@ impl MultiWorkspace {
         Self {
             window_id: window.window_handle().window_id(),
             workspaces: vec![workspace],
-            database_id: None,
             active_workspace_index: 0,
+            sidebar: None,
             #[cfg(target_os = "macos")]
             unified_sidebar,
             sidebar_open: false,
@@ -146,8 +193,20 @@ impl MultiWorkspace {
         &self.unified_sidebar
     }
 
+    pub fn register_sidebar<T: Sidebar>(&mut self, sidebar: Entity<T>) {
+        self.sidebar = Some(Box::new(sidebar));
+    }
+
+    pub fn sidebar(&self) -> Option<&dyn SidebarHandle> {
+        self.sidebar.as_deref()
+    }
+
     pub fn sidebar_has_notifications(&self, cx: &App) -> bool {
         self.sidebar_has_notifications && multi_workspace_enabled(cx)
+    }
+
+    pub fn sidebar_open(&self) -> bool {
+        self.sidebar_open
     }
 
     pub fn is_sidebar_open(&self) -> bool {
@@ -173,6 +232,66 @@ impl MultiWorkspace {
         }
 
         self.sidebar_has_notifications = has_notifications;
+        cx.notify();
+    }
+
+    pub fn multi_workspace_enabled(&self, cx: &App) -> bool {
+        multi_workspace_enabled(cx)
+    }
+
+    pub fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_open {
+            self.close_sidebar(window, cx);
+        } else {
+            self.open_sidebar(cx);
+            if let Some(sidebar) = &self.sidebar {
+                sidebar.focus(window, cx);
+            }
+        }
+    }
+
+    pub fn focus_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_open {
+            let sidebar_is_focused = self
+                .sidebar
+                .as_ref()
+                .is_some_and(|sidebar| sidebar.focus_handle(cx).contains_focused(window, cx));
+
+            if sidebar_is_focused {
+                let pane = self.workspace().read(cx).active_pane().clone();
+                let pane_focus = pane.read(cx).focus_handle(cx);
+                window.focus(&pane_focus, cx);
+            } else if let Some(sidebar) = &self.sidebar {
+                sidebar.focus(window, cx);
+            }
+        } else {
+            self.open_sidebar(cx);
+            if let Some(sidebar) = &self.sidebar {
+                sidebar.focus(window, cx);
+            }
+        }
+    }
+
+    pub fn open_sidebar(&mut self, cx: &mut Context<Self>) {
+        if self.sidebar_open {
+            return;
+        }
+
+        self.sidebar_open = true;
+        self.serialize(cx);
+        cx.notify();
+    }
+
+    fn close_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.sidebar_open {
+            return;
+        }
+
+        self.sidebar_open = false;
+        let pane = self.workspace().read(cx).active_pane().clone();
+        let pane_focus = pane.read(cx).focus_handle(cx);
+        window.focus(&pane_focus, cx);
+        self.serialize(cx);
         cx.notify();
     }
 
@@ -345,6 +464,7 @@ impl MultiWorkspace {
         let window_id = self.window_id;
         let state = crate::persistence::model::MultiWorkspaceState {
             active_workspace_id: self.workspace().read(cx).database_id(),
+            sidebar_open: self.sidebar_open,
         };
         self._serialize_task = Some(cx.background_spawn(async move {
             crate::persistence::write_multi_workspace_state(window_id, state).await;
@@ -461,14 +581,6 @@ impl MultiWorkspace {
         cx: &'a App,
     ) -> impl 'a + Iterator<Item = Entity<T>> {
         self.workspace().read(cx).items_of_type::<T>(cx)
-    }
-
-    pub fn database_id(&self) -> Option<MultiWorkspaceId> {
-        self.database_id
-    }
-
-    pub fn set_database_id(&mut self, id: Option<MultiWorkspaceId>) {
-        self.database_id = id;
     }
 
     pub fn active_workspace_database_id(&self, cx: &App) -> Option<WorkspaceId> {
@@ -631,6 +743,55 @@ impl Render for MultiWorkspace {
         #[cfg(target_os = "macos")]
         self.sync_unified_sidebar(cx);
 
+        let multi_workspace_enabled = self.multi_workspace_enabled(cx);
+        let sidebar = if multi_workspace_enabled && self.sidebar_open() {
+            self.sidebar.as_ref().map(|sidebar_handle| {
+                let weak = cx.weak_entity();
+                let sidebar_width = sidebar_handle.width(cx);
+                let resize_handle = deferred(
+                    div()
+                        .id("sidebar-resize-handle")
+                        .absolute()
+                        .right(-SIDEBAR_RESIZE_HANDLE_SIZE / 2.)
+                        .top(px(0.))
+                        .h_full()
+                        .w(SIDEBAR_RESIZE_HANDLE_SIZE)
+                        .cursor_col_resize()
+                        .on_drag(DraggedSidebar, |dragged, _, _, cx| {
+                            cx.stop_propagation();
+                            cx.new(|_| dragged.clone())
+                        })
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .on_mouse_up(MouseButton::Left, move |event, _, cx| {
+                            if event.click_count == 2 {
+                                weak.update(cx, |this, cx| {
+                                    if let Some(sidebar) = this.sidebar.as_mut() {
+                                        sidebar.set_width(None, cx);
+                                    }
+                                })
+                                .ok();
+                                cx.stop_propagation();
+                            }
+                        })
+                        .occlude(),
+                );
+
+                div()
+                    .id("sidebar-container")
+                    .relative()
+                    .h_full()
+                    .w(sidebar_width)
+                    .flex_shrink_0()
+                    .child(sidebar_handle.to_any())
+                    .child(resize_handle)
+                    .into_any_element()
+            })
+        } else {
+            None
+        };
+
         let ui_font = theme::setup_ui_font(window, cx);
         let text_color = cx.theme().colors().text;
 
@@ -660,6 +821,26 @@ impl Render for MultiWorkspace {
                         this.activate_previous_workspace(window, cx);
                     },
                 ))
+                .on_action(cx.listener(
+                    |this: &mut Self, _: &ToggleWorkspaceSidebar, window, cx| {
+                        this.toggle_sidebar(window, cx);
+                    },
+                ))
+                .on_action(
+                    cx.listener(|this: &mut Self, _: &FocusWorkspaceSidebar, window, cx| {
+                        this.focus_sidebar(window, cx);
+                    }),
+                )
+                .when(self.sidebar_open() && multi_workspace_enabled, |this| {
+                    this.on_drag_move(cx.listener(
+                        |this: &mut Self, e: &DragMoveEvent<DraggedSidebar>, _window, cx| {
+                            if let Some(sidebar) = &this.sidebar {
+                                sidebar.set_width(Some(e.event.position.x), cx);
+                            }
+                        },
+                    ))
+                    .children(sidebar)
+                })
                 .child({
                     let workspace_content = div()
                         .flex()
@@ -704,7 +885,10 @@ impl Render for MultiWorkspace {
                 .child(self.workspace().read(cx).modal_layer.clone()),
             window,
             cx,
-            Tiling::default(),
+            Tiling {
+                left: multi_workspace_enabled && self.sidebar_open(),
+                ..Tiling::default()
+            },
         )
     }
 }
@@ -712,10 +896,8 @@ impl Render for MultiWorkspace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use feature_flags::FeatureFlagAppExt;
     use fs::FakeFs;
     use gpui::{Context, FocusHandle, Focusable, Render, TestAppContext, div};
-    use project::DisableAiSettings;
     use settings::SettingsStore;
     use std::sync::Arc;
     use workspace_modes::RegisteredModeView;
@@ -750,8 +932,6 @@ mod tests {
             cx.set_global(settings_store);
             theme::init(theme::LoadThemes::JustBase, cx);
             workspace_modes::init(cx);
-            DisableAiSettings::register(cx);
-            cx.update_flags(false, vec!["agent-v2".into()]);
         });
     }
 
@@ -808,5 +988,4 @@ mod tests {
             );
         });
     }
-
 }

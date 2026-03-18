@@ -69,6 +69,7 @@ use settings::{
     initial_local_debug_tasks_content, initial_project_settings_content, initial_tasks_content,
     update_settings_file,
 };
+use sidebar::Sidebar;
 use std::{
     borrow::Cow,
     path::{Path, PathBuf},
@@ -336,7 +337,7 @@ pub fn build_window_options(display_uuid: Option<Uuid>, cx: &mut App) -> WindowO
         focus: false,
         show: false,
         kind: WindowKind::Normal,
-        is_movable: !cfg!(target_os = "macos"),
+        is_movable: true,
         display_id: display.map(|display| display.id()),
         window_background: cx.theme().window_background_appearance(),
         app_id: Some(app_id.to_owned()),
@@ -380,6 +381,20 @@ pub fn initialize_workspace(
                     false
                 })
                 .unwrap_or(true)
+        });
+
+        let window_handle = window.window_handle();
+        let multi_workspace_handle = cx.entity();
+        cx.defer(move |cx| {
+            window_handle
+                .update(cx, |_, window, cx| {
+                    let sidebar =
+                        cx.new(|cx| Sidebar::new(multi_workspace_handle.clone(), window, cx));
+                    multi_workspace_handle.update(cx, |multi_workspace, _cx| {
+                        multi_workspace.register_sidebar(sidebar);
+                    });
+                })
+                .ok();
         });
     })
     .detach();

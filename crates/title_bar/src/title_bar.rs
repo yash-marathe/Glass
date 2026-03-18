@@ -228,6 +228,7 @@ impl TitleBar {
                         && (title_bar_settings.show_branch_name
                             || title_bar_settings.show_project_items);
                     title_bar
+                        .children(self.render_workspace_sidebar_toggle(window, cx))
                         .when_some(
                             self.application_menu.clone().filter(|_| !show_menus),
                             |title_bar, menu| {
@@ -432,6 +433,7 @@ impl TitleBar {
 
         // Set up observer to sync sidebar state from MultiWorkspace to PlatformTitleBar.
         {
+            let platform_titlebar = platform_titlebar.clone();
             let window_handle = window.window_handle();
             cx.spawn(async move |this: WeakEntity<TitleBar>, cx| {
                 let Some(multi_workspace_handle) = window_handle.downcast::<MultiWorkspace>()
@@ -444,8 +446,26 @@ impl TitleBar {
                         return;
                     };
 
+                    let is_open = multi_workspace.read(cx).sidebar_open();
+                    let has_notifications = multi_workspace.read(cx).sidebar_has_notifications(cx);
+                    platform_titlebar.update(cx, |titlebar, cx| {
+                        titlebar.set_workspace_sidebar_open(is_open, cx);
+                        titlebar.set_sidebar_has_notifications(has_notifications, cx);
+                    });
+
+                    let platform_titlebar = platform_titlebar.clone();
+                    let subscription = cx.observe(&multi_workspace, move |mw, cx| {
+                        let is_open = mw.read(cx).sidebar_open();
+                        let has_notifications = mw.read(cx).sidebar_has_notifications(cx);
+                        platform_titlebar.update(cx, |titlebar, cx| {
+                            titlebar.set_workspace_sidebar_open(is_open, cx);
+                            titlebar.set_sidebar_has_notifications(has_notifications, cx);
+                        });
+                    });
+
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |this, _| {
+                            this._subscriptions.push(subscription);
                             this.multi_workspace = Some(multi_workspace.downgrade());
                         });
                     }
@@ -762,7 +782,6 @@ impl TitleBar {
                 .into_any_element(),
         )
     }
-
     #[cfg(not(target_os = "macos"))]
     fn render_mode_switcher(
         &self,
@@ -809,20 +828,23 @@ impl TitleBar {
         let has_notifications = self.platform_titlebar.read(cx).sidebar_has_notifications();
 
         Some(
-            IconButton::new("toggle-workspace-sidebar", IconName::WorkspaceNavClosed)
-                .icon_size(IconSize::Small)
-                .when(has_notifications, |button| {
-                    button
-                        .indicator(Indicator::dot().color(Color::Accent))
-                        .indicator_border_color(Some(cx.theme().colors().title_bar_background))
-                })
-                .tooltip(move |_, cx| {
-                    Tooltip::for_action("Open Threads Sidebar", &ToggleWorkspaceSidebar, cx)
-                })
-                .on_click(|_, window, cx| {
-                    window.dispatch_action(ToggleWorkspaceSidebar.boxed_clone(), cx);
-                })
-                .into_any_element(),
+            IconButton::new(
+                "toggle-workspace-sidebar",
+                IconName::ThreadsSidebarLeftClosed,
+            )
+            .icon_size(IconSize::Small)
+            .when(has_notifications, |button| {
+                button
+                    .indicator(Indicator::dot().color(Color::Accent))
+                    .indicator_border_color(Some(cx.theme().colors().title_bar_background))
+            })
+            .tooltip(move |_, cx| {
+                Tooltip::for_action("Open Threads Sidebar", &ToggleWorkspaceSidebar, cx)
+            })
+            .on_click(|_, window, cx| {
+                window.dispatch_action(ToggleWorkspaceSidebar.boxed_clone(), cx);
+            })
+            .into_any_element(),
         )
     }
 

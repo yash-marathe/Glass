@@ -4450,7 +4450,7 @@ fn panels_page() -> SettingsPage {
         ]
     }
 
-    fn terminal_panel_section() -> [SettingsPageItem; 2] {
+    fn terminal_panel_section() -> [SettingsPageItem; 3] {
         [
             SettingsPageItem::SectionHeader("Terminal Panel"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -4466,10 +4466,32 @@ fn panels_page() -> SettingsPage {
                 metadata: None,
                 files: USER,
             }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Show Count Badge",
+                description: "Show a badge on the terminal panel icon with the count of open terminals.",
+                field: Box::new(SettingField {
+                    json_path: Some("terminal.show_count_badge"),
+                    pick: |settings_content| {
+                        settings_content
+                            .terminal
+                            .as_ref()?
+                            .show_count_badge
+                            .as_ref()
+                    },
+                    write: |settings_content, value| {
+                        settings_content
+                            .terminal
+                            .get_or_insert_default()
+                            .show_count_badge = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
         ]
     }
 
-    fn git_panel_section() -> [SettingsPageItem; 11] {
+    fn git_panel_section() -> [SettingsPageItem; 14] {
         [
             SettingsPageItem::SectionHeader("Git Panel"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -4612,6 +4634,42 @@ fn panels_page() -> SettingsPage {
                 files: USER,
             }),
             SettingsPageItem::SettingItem(SettingItem {
+                title: "File Icons",
+                description: "Show file icons next to the Git status icon.",
+                field: Box::new(SettingField {
+                    json_path: Some("git_panel.file_icons"),
+                    pick: |settings_content| {
+                        settings_content.git_panel.as_ref()?.file_icons.as_ref()
+                    },
+                    write: |settings_content, value| {
+                        settings_content
+                            .git_panel
+                            .get_or_insert_default()
+                            .file_icons = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Folder Icons",
+                description: "Whether to show folder icons or chevrons for directories in the git panel.",
+                field: Box::new(SettingField {
+                    json_path: Some("git_panel.folder_icons"),
+                    pick: |settings_content| {
+                        settings_content.git_panel.as_ref()?.folder_icons.as_ref()
+                    },
+                    write: |settings_content, value| {
+                        settings_content
+                            .git_panel
+                            .get_or_insert_default()
+                            .folder_icons = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
                 title: "Diff Stats",
                 description: "Whether to show the addition/deletion change count next to each file in the Git panel.",
                 field: Box::new(SettingField {
@@ -4624,6 +4682,28 @@ fn panels_page() -> SettingsPage {
                             .git_panel
                             .get_or_insert_default()
                             .diff_stats = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Show Count Badge",
+                description: "Whether to show a badge on the git panel icon with the count of uncommitted changes.",
+                field: Box::new(SettingField {
+                    json_path: Some("git_panel.show_count_badge"),
+                    pick: |settings_content| {
+                        settings_content
+                            .git_panel
+                            .as_ref()?
+                            .show_count_badge
+                            .as_ref()
+                    },
+                    write: |settings_content, value| {
+                        settings_content
+                            .git_panel
+                            .get_or_insert_default()
+                            .show_count_badge = value;
                     },
                 }),
                 metadata: None,
@@ -4679,7 +4759,7 @@ fn panels_page() -> SettingsPage {
         ]
     }
 
-    fn notification_panel_section() -> [SettingsPageItem; 4] {
+    fn notification_panel_section() -> [SettingsPageItem; 5] {
         [
             SettingsPageItem::SectionHeader("Notification Panel"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -4739,6 +4819,28 @@ fn panels_page() -> SettingsPage {
                             .notification_panel
                             .get_or_insert_default()
                             .default_width = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: "Show Count Badge",
+                description: "Show a badge on the notification panel icon with the count of unread notifications.",
+                field: Box::new(SettingField {
+                    json_path: Some("notification_panel.show_count_badge"),
+                    pick: |settings_content| {
+                        settings_content
+                            .notification_panel
+                            .as_ref()?
+                            .show_count_badge
+                            .as_ref()
+                    },
+                    write: |settings_content, value| {
+                        settings_content
+                            .notification_panel
+                            .get_or_insert_default()
+                            .show_count_badge = value;
                     },
                 }),
                 metadata: None,
