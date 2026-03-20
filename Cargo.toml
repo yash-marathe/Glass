@@ -487,7 +487,7 @@ cocoa-foundation = "=0.2.0"
 convert_case = "0.8.0"
 core-foundation = "=0.10.0"
 core-foundation-sys = "0.8.6"
-core-video = { version = "0.4.3", features = ["metal"] }
+core-video = { version = "0.5.2", features = ["metal"] }
 io-surface = "0.16"
 cpal = "0.17"
 crash-handler = "0.6"
@@ -551,13 +551,13 @@ markup5ever_rcdom = "0.3.0"
 metal = "0.33"
 minidumper = "0.8"
 moka = { version = "0.12.10", features = ["sync"] }
-naga = { version = "28.0", features = ["wgsl-in"] }
+naga = { version = "29.0", features = ["wgsl-in"] }
 nanoid = "0.4"
 nbformat = "1.2.0"
 nix = "0.29"
 num-format = "0.4.4"
 objc = "0.2"
-objc2-foundation = { version = "=0.3.1", default-features = false, features = [
+objc2-foundation = { version = "=0.3.2", default-features = false, features = [
     "NSArray",
     "NSAttributedString",
     "NSBundle",
@@ -671,7 +671,7 @@ time = { version = "0.3", features = [
     "formatting",
     "local-offset",
 ] }
-tiny_http = "0.8"
+tiny_http = "0.12"
 tokio = { version = "1" }
 tokio-socks = { version = "0.5.2", default-features = false, features = [
     "futures-io",
@@ -731,7 +731,8 @@ wasmtime = { version = "33", default-features = false, features = [
 wasmtime-wasi = "33"
 wax = "0.7"
 which = "6.0.0"
-wgpu = "28.0"
+web-time = "1.1.0"
+wgpu = "29"
 windows-core = "0.61"
 yawc = "0.2.5"
 zeroize = "1.8"

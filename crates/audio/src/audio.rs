@@ -8,8 +8,7 @@ use util::ResultExt;
 
 mod audio_settings;
 pub use audio_settings::AudioSettings;
-
-use crate::audio_settings::LIVE_SETTINGS;
+pub use audio_settings::LIVE_SETTINGS;
 
 pub const SAMPLE_RATE: NonZero<u32> = nz!(16000);
 pub const CHANNEL_COUNT: NonZero<u16> = nz!(1);

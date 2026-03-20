@@ -44,8 +44,8 @@ use theme::ActiveTheme;
 use title_bar_settings::TitleBarSettings;
 #[allow(unused_imports)]
 use ui::{
-    Avatar, ButtonLike, ContextMenu, Divider, IconWithIndicator, Indicator, PopoverMenu,
-    PopoverMenuHandle, TintColor, Tooltip, prelude::*, utils::platform_title_bar_height,
+    Avatar, ButtonLike, ContextMenu, IconWithIndicator, Indicator, PopoverMenu, PopoverMenuHandle,
+    TintColor, Tooltip, prelude::*, utils::platform_title_bar_height,
 };
 use update_version::UpdateVersion;
 use util::ResultExt;
@@ -225,21 +225,19 @@ impl TitleBar {
         let mut repository = None;
         let mut linked_worktree_name = None;
         if let Some(worktree) = self.effective_active_worktree(cx) {
+            repository = self.get_repository_for_worktree(&worktree, cx);
+            let worktree = worktree.read(cx);
             project_name = worktree
-                .read(cx)
                 .root_name()
                 .file_name()
                 .map(|name| SharedString::from(name.to_string()));
-            repository = self.get_repository_for_worktree(&worktree, cx);
             linked_worktree_name = repository.as_ref().and_then(|repo| {
-                let path = repo.read(cx).linked_worktree_path()?;
-                let directory_name = path.file_name()?.to_str()?;
-                let unique_worktree_name = if directory_name != project_name.as_ref()?.as_str() {
-                    directory_name.to_string()
-                } else {
-                    path.parent()?.file_name()?.to_str()?.to_string()
-                };
-                Some(SharedString::from(unique_worktree_name))
+                let repo = repo.read(cx);
+                linked_worktree_short_name(
+                    repo.original_repo_abs_path.as_ref(),
+                    repo.work_directory_abs_path.as_ref(),
+                )
+                .filter(|name| Some(name) != project_name.as_ref())
             });
         }
 
@@ -252,7 +250,6 @@ impl TitleBar {
                         && (title_bar_settings.show_branch_name
                             || title_bar_settings.show_project_items);
                     title_bar
-                        .children(self.render_workspace_sidebar_toggle(window, cx))
                         .when_some(
                             self.application_menu.clone().filter(|_| !show_menus),
                             |title_bar, menu| {
@@ -642,14 +639,15 @@ impl TitleBar {
         let git_store = project.git_store().read(cx);
         let worktree_path = worktree.read(cx).abs_path();
 
-        for repo in git_store.repositories().values() {
-            let repo_path = &repo.read(cx).work_directory_abs_path;
-            if worktree_path == *repo_path || worktree_path.starts_with(repo_path.as_ref()) {
-                return Some(repo.clone());
-            }
-        }
-
-        None
+        git_store
+            .repositories()
+            .values()
+            .filter(|repo| {
+                let repo_path = &repo.read(cx).work_directory_abs_path;
+                worktree_path == *repo_path || worktree_path.starts_with(repo_path.as_ref())
+            })
+            .max_by_key(|repo| repo.read(cx).work_directory_abs_path.as_os_str().len())
+            .cloned()
     }
 
     fn render_remote_project_connection(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -886,7 +884,6 @@ impl TitleBar {
                 .into_any_element(),
         )
     }
-
     fn render_project_name(
         &self,
         name: Option<SharedString>,
@@ -905,7 +902,14 @@ impl TitleBar {
 
         let is_sidebar_open = self.platform_titlebar.read(cx).is_workspace_sidebar_open();
 
-        if is_sidebar_open {
+        let is_threads_list_view_active = self
+            .multi_workspace
+            .as_ref()
+            .and_then(|mw| mw.upgrade())
+            .map(|mw| mw.read(cx).is_threads_list_view_active(cx))
+            .unwrap_or(false);
+
+        if is_sidebar_open && is_threads_list_view_active {
             return self
                 .render_project_name_with_sidebar_popover(display_name, is_project_selected, cx)
                 .into_any_element();
@@ -916,7 +920,7 @@ impl TitleBar {
             .map(|w| w.read(cx).focus_handle(cx))
             .unwrap_or_else(|| cx.focus_handle());
 
-        let excluded_workspace_ids: HashSet<WorkspaceId> = self
+        let sibling_workspace_ids: HashSet<WorkspaceId> = self
             .multi_workspace
             .as_ref()
             .and_then(|mw| mw.upgrade())
@@ -933,7 +937,7 @@ impl TitleBar {
             .menu(move |window, cx| {
                 Some(recent_projects::RecentProjects::popover(
                     workspace.clone(),
-                    excluded_workspace_ids.clone(),
+                    sibling_workspace_ids.clone(),
                     false,
                     focus_handle.clone(),
                     window,
