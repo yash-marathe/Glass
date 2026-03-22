@@ -271,6 +271,7 @@ dependencies = [
  "collections",
  "credentials_provider",
  "env_logger 0.11.8",
+ "feature_flags",
  "fs",
  "futures",
  "google_ai",
@@ -333,7 +334,6 @@ dependencies = [
  "agent_settings",
  "ai_onboarding",
  "anyhow",
- "arrayvec",
  "assistant_slash_command",
  "assistant_slash_commands",
  "assistant_text_thread",
@@ -362,6 +362,7 @@ dependencies = [
  "git",
  "gpui",
  "gpui_tokio",
+ "heapless",
  "html_to_markdown",
  "http_client",
  "image",
@@ -714,9 +715,6 @@ name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "ascii"
@@ -4606,7 +4604,6 @@ version = "0.1.0"
 dependencies = [
  "ai_onboarding",
  "anyhow",
- "arrayvec",
  "brotli",
  "buffer_diff",
  "client",
@@ -4624,6 +4621,7 @@ dependencies = [
  "fs",
  "futures",
  "gpui",
+ "heapless",
  "indoc",
  "itertools 0.14.0",
  "language",
@@ -7176,6 +7174,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hash32"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7239,6 +7246,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7f66481bfee273957b1f20485a4ff3362987f85b2c236580d81b4eb7a326429"
 dependencies = [
  "http 0.2.12",
+]
+
+[[package]]
+name = "heapless"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af2455f757db2b292a9b1768c4b70186d443bcb3b316252d6b540aec1cd89ed"
+dependencies = [
+ "hash32",
+ "stable_deref_trait",
 ]
 
 [[package]]
@@ -13113,10 +13130,10 @@ dependencies = [
 name = "rope"
 version = "0.1.0"
 dependencies = [
- "arrayvec",
  "criterion",
  "ctor",
  "gpui",
+ "heapless",
  "log",
  "rand 0.9.2",
  "rayon",
@@ -14762,7 +14779,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 name = "sum_tree"
 version = "0.1.0"
 dependencies = [
- "arrayvec",
+ "heapless",
  "log",
  "rayon",
  "tracing",
@@ -20201,3 +20218,18 @@ dependencies = [
  "syn 2.0.117",
  "winnow",
 ]
+
+[[patch.unused]]
+name = "libwebrtc"
+version = "0.3.26"
+source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c1209aa155cbf4543383774f884a46ae7e53ee2e#c1209aa155cbf4543383774f884a46ae7e53ee2e"
+
+[[patch.unused]]
+name = "livekit"
+version = "0.7.32"
+source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c1209aa155cbf4543383774f884a46ae7e53ee2e#c1209aa155cbf4543383774f884a46ae7e53ee2e"
+
+[[patch.unused]]
+name = "webrtc-sys"
+version = "0.3.23"
+source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=c1209aa155cbf4543383774f884a46ae7e53ee2e#c1209aa155cbf4543383774f884a46ae7e53ee2e"

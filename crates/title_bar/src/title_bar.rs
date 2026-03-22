@@ -1029,7 +1029,8 @@ impl TitleBar {
 
         let branch_name = {
             let repo = repository.read(cx);
-            repo.branch
+            let branch_name = repo
+                .branch
                 .as_ref()
                 .map(|branch| branch.name())
                 .map(|name| util::truncate_and_trailoff(name, MAX_BRANCH_NAME_LENGTH))
@@ -1041,13 +1042,28 @@ impl TitleBar {
                             .take(MAX_SHORT_SHA_LENGTH)
                             .collect::<String>()
                     })
-                })
+                });
+
+            let status = repo.status_summary();
+            let tracked = status.index + status.worktree;
+            let icon_info = if status.conflict > 0 {
+                (IconName::Warning, Color::VersionControlConflict)
+            } else if tracked.modified > 0 {
+                (IconName::SquareDot, Color::VersionControlModified)
+            } else if tracked.added > 0 || status.untracked > 0 {
+                (IconName::SquarePlus, Color::VersionControlAdded)
+            } else if tracked.deleted > 0 {
+                (IconName::SquareMinus, Color::VersionControlDeleted)
+            } else {
+                (IconName::GitBranch, Color::Muted)
+            };
+
+            (branch_name, icon_info)
         };
 
-        let branch_name = linked_worktree_name.map_or(branch_name.clone(), |worktree_name| {
-            branch_name.map(|branch_name| format!("{worktree_name}/{branch_name}"))
-        });
-        let show_branch_icon = TitleBarSettings::get_global(cx).show_branch_icon;
+        let (branch_name, icon_info) = branch_name;
+        let branch_name = branch_name?;
+        let settings = TitleBarSettings::get_global(cx);
         let effective_repository = Some(repository);
 
         Some(
@@ -1062,14 +1078,46 @@ impl TitleBar {
                         cx,
                     ))
                 })
-                .trigger(
-                    native_button("project_branch_trigger", branch_name?).button_style(
-                        if show_branch_icon {
-                            NativeButtonStyle::Rounded
-                        } else {
-                            NativeButtonStyle::Inline
-                        },
-                    ),
+                .trigger_with_tooltip(
+                    ButtonLike::new("project_branch_trigger")
+                        .selected_style(ButtonStyle::Tinted(TintColor::Accent))
+                        .child(
+                            h_flex()
+                                .gap_0p5()
+                                .when(settings.show_branch_icon, |this| {
+                                    let (icon, icon_color) = icon_info;
+                                    this.child(
+                                        Icon::new(icon).size(IconSize::XSmall).color(icon_color),
+                                    )
+                                })
+                                .when_some(linked_worktree_name.as_ref(), |this, worktree_name| {
+                                    this.child(
+                                        Label::new(worktree_name)
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted),
+                                    )
+                                    .child(
+                                        Label::new("/").size(LabelSize::Small).color(
+                                            Color::Custom(
+                                                cx.theme().colors().text_muted.opacity(0.4),
+                                            ),
+                                        ),
+                                    )
+                                })
+                                .child(
+                                    Label::new(branch_name)
+                                        .size(LabelSize::Small)
+                                        .color(Color::Muted),
+                                ),
+                        ),
+                    move |_window, cx| {
+                        Tooltip::with_meta(
+                            "Git Switcher",
+                            Some(&zed_actions::git::Branch),
+                            "Worktrees, Branches, and Stashes",
+                            cx,
+                        )
+                    },
                 )
                 .anchor(gpui::Corner::TopLeft),
         )
