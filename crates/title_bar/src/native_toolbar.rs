@@ -6,12 +6,14 @@ use browser;
 use client::{Client, UserStore};
 use editor::Editor;
 use gpui::{
-    Action, App, AppContext as _, Context, Entity, IntoElement, NativePanel, NativePanelAnchor,
-    NativePanelLevel, NativePanelMaterial, NativePanelStyle, NativePopoverClickableRow,
-    NativePopoverContentItem, NativeToolbar, NativeToolbarButton, NativeToolbarDisplayMode,
-    NativeToolbarItem, NativeToolbarLabel, NativeToolbarMenuButton, NativeToolbarMenuItem,
-    NativeToolbarSearchEvent, NativeToolbarSearchField, NativeToolbarSizeMode, Render,
-    SharedString, Subscription, WeakEntity, Window, px,
+    Action, AnyElement, App, AppContext as _, Context, Corner, DismissEvent, Entity, Focusable,
+    IntoElement,
+    NativePanel, NativePanelAnchor, NativePanelLevel, NativePanelMaterial, NativePanelStyle,
+    NativePopoverClickableRow, NativePopoverContentItem, NativeToolbar, NativeToolbarButton,
+    NativeToolbarDisplayMode, NativeToolbarItem, NativeToolbarLabel, NativeToolbarMenuButton,
+    NativeToolbarMenuItem, NativeToolbarSearchEvent, NativeToolbarSearchField,
+    NativeToolbarSizeMode, Render, SharedString, Styled, Subscription, WeakEntity, Window,
+    anchored, deferred, div, point, px,
 };
 use image_viewer::ImageView;
 use language::LineEnding;
@@ -19,7 +21,9 @@ use platform_title_bar::PlatformTitleBar;
 use project::image_store::{ImageFormat, ImageMetadata};
 use project::{Project, git_store::GitStoreEvent, trusted_worktrees::TrustedWorktrees};
 use settings::Settings;
-use std::sync::Arc;
+use std::{any::TypeId, sync::Arc};
+use ui::{Color, Icon, IconName, IconSize, Label, LabelSize, h_flex, prelude::*};
+use ui::ContextMenu;
 use workspace::{
     MultiWorkspace, Pane, TitleBarItemViewHandle, ToggleWorktreeSecurity, Workspace,
     notifications::NotifyResultExt,
@@ -30,6 +34,116 @@ use zed_actions::OpenRemote;
 const MAX_PROJECT_NAME_LENGTH: usize = 40;
 const MAX_BRANCH_NAME_LENGTH: usize = 40;
 const MAX_SHORT_SHA_LENGTH: usize = 8;
+
+struct BranchToolbarContent {
+    icon: IconName,
+    icon_color: Color,
+    branch_name: SharedString,
+}
+
+impl Render for BranchToolbarContent {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .child(
+                h_flex()
+                    .gap_0p5()
+                    .child(
+                        Icon::new(self.icon)
+                            .size(IconSize::XSmall)
+                            .color(self.icon_color),
+                    )
+                    .child(
+                        Label::new(self.branch_name.clone())
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
+            )
+    }
+}
+
+struct ModeSwitcherToolbarContent {
+    icon: IconName,
+    label: SharedString,
+}
+
+impl Render for ModeSwitcherToolbarContent {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .child(
+                h_flex()
+                    .gap_0p5()
+                    .child(Icon::new(self.icon).size(IconSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new(self.label.clone())
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(
+                        Icon::new(IconName::ChevronDown)
+                            .size(IconSize::XSmall)
+                            .color(Color::Muted),
+                    ),
+            )
+    }
+}
+
+struct ToolbarMenuTriggerContent {
+    icon: IconName,
+    label: SharedString,
+}
+
+impl Render for ToolbarMenuTriggerContent {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .child(
+                h_flex()
+                    .gap_0p5()
+                    .child(Icon::new(self.icon).size(IconSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new(self.label.clone())
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
+            )
+    }
+}
+
+struct ProjectToolbarContent {
+    icon: IconName,
+    label: SharedString,
+}
+
+impl Render for ProjectToolbarContent {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .child(
+                h_flex()
+                    .gap_0p5()
+                    .child(Icon::new(self.icon).size(IconSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new(self.label.clone())
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
+            )
+    }
+}
 
 pub struct NativeToolbarController {
     platform_titlebar: Entity<PlatformTitleBar>,
@@ -55,6 +169,10 @@ pub struct NativeToolbarController {
     status_image_info: Option<String>,
     active_editor_subscription: Option<Subscription>,
     active_image_subscription: Option<Subscription>,
+    toolbar_overlay_menu: Option<Entity<ContextMenu>>,
+    toolbar_overlay_anchor: Option<gpui::Point<gpui::Pixels>>,
+    toolbar_overlay_item_id: Option<SharedString>,
+    toolbar_overlay_subscription: Option<Subscription>,
 }
 
 impl Render for NativeToolbarController {
@@ -70,6 +188,10 @@ impl Render for NativeToolbarController {
             .ok();
         })
         .detach();
+        let overlay = self.render_toolbar_overlay(cx);
+        self.platform_titlebar.update(cx, |titlebar, _| {
+            titlebar.set_children(overlay.into_iter());
+        });
         self.platform_titlebar.clone().into_any_element()
     }
 }
@@ -220,6 +342,10 @@ impl NativeToolbarController {
             status_image_info: None,
             active_editor_subscription: None,
             active_image_subscription: None,
+            toolbar_overlay_menu: None,
+            toolbar_overlay_anchor: None,
+            toolbar_overlay_item_id: None,
+            toolbar_overlay_subscription: None,
         }
     }
 
@@ -264,6 +390,83 @@ impl NativeToolbarController {
             item.set_active_pane_item(active_pane_item.as_deref(), window, cx);
         }
         self.refresh_status_data(window, cx);
+    }
+
+    fn close_toolbar_overlay(&mut self, cx: &mut Context<Self>) {
+        self.toolbar_overlay_menu = None;
+        self.toolbar_overlay_anchor = None;
+        self.toolbar_overlay_item_id = None;
+        self.toolbar_overlay_subscription = None;
+        cx.notify();
+    }
+
+    fn open_toolbar_context_menu(
+        &mut self,
+        menu: Entity<ContextMenu>,
+        item_id: impl Into<SharedString>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let item_id = item_id.into();
+
+        if self.toolbar_overlay_item_id.as_ref() == Some(&item_id)
+            && self.toolbar_overlay_menu.as_ref().is_some_and(|open| open == &menu)
+        {
+            self.close_toolbar_overlay(cx);
+            return;
+        }
+
+        let Some(bounds) = window.native_toolbar_item_bounds(item_id.as_ref()) else {
+            return;
+        };
+
+        let anchor = point(bounds.origin.x, bounds.origin.y + bounds.size.height + px(4.0));
+
+        let subscription = cx.subscribe(&menu, |this, _, _: &DismissEvent, cx| {
+            this.close_toolbar_overlay(cx);
+        });
+
+        self.toolbar_overlay_menu = Some(menu.clone());
+        self.toolbar_overlay_anchor = Some(anchor);
+        self.toolbar_overlay_item_id = Some(item_id);
+        self.toolbar_overlay_subscription = Some(subscription);
+
+        let focus_handle = menu.focus_handle(cx);
+        window.on_next_frame(move |window, _cx| {
+            window.on_next_frame(move |window, cx| {
+                window.focus(&focus_handle, cx);
+            });
+        });
+        cx.notify();
+    }
+
+    fn render_toolbar_overlay(&self, _cx: &Context<Self>) -> Option<AnyElement> {
+        let menu = self.toolbar_overlay_menu.clone()?;
+        let anchor = self.toolbar_overlay_anchor?;
+
+        Some(
+            deferred(
+                anchored()
+                    .position(anchor)
+                    .anchor(Corner::TopLeft)
+                    .snap_to_window_with_margin(px(8.0))
+                    .child(
+                        div()
+                            .id("native-toolbar-overlay-root")
+                            .occlude()
+                            .child(menu),
+                    ),
+            )
+            .priority(1)
+            .into_any_element(),
+        )
+    }
+
+    fn right_item_view<T: 'static>(&self) -> Option<Entity<T>> {
+        self.right_items
+            .iter()
+            .find(|item| item.item_type() == TypeId::of::<T>())
+            .and_then(|item| item.to_any().downcast::<T>().ok())
     }
 
     pub fn invalidate_toolbar(&mut self, cx: &mut Context<Self>) {
@@ -615,27 +818,25 @@ impl NativeToolbarController {
         }
 
         if active_mode == ModeId::EDITOR {
-            let dev_tools_items = vec![
-                NativeToolbarMenuItem::action("Logs").icon("arrow.triangle.2.circlepath"),
-                NativeToolbarMenuItem::action("Language Servers").icon("bolt"),
-                NativeToolbarMenuItem::action("Edit Predictions").icon("sparkles"),
-            ];
-            toolbar = toolbar.item(NativeToolbarItem::MenuButton(
-                NativeToolbarMenuButton::new("glass.status.dev_tools", "", dev_tools_items)
-                    .tool_tip("Developer Tools")
-                    .icon("hammer")
-                    .on_select(|event, window, cx| match event.index {
-                        0 => window.dispatch_action(workspace::OpenLog.boxed_clone(), cx),
-                        1 => window.dispatch_action(
-                            language_tools::lsp_button::ToggleMenu.boxed_clone(),
-                            cx,
-                        ),
-                        2 => {
-                            window.dispatch_action(edit_prediction_ui::ToggleMenu.boxed_clone(), cx)
-                        }
-                        _ => {}
+            toolbar = toolbar.item(NativeToolbarItem::Button(
+                NativeToolbarButton::new("glass.status.logs", "Logs")
+                    .tool_tip("Open Logs")
+                    .content_view(cx.new(|_| ToolbarMenuTriggerContent {
+                        icon: IconName::RotateCw,
+                        label: "Logs".into(),
+                    }))
+                    .on_click(|_event, window, cx| {
+                        window.dispatch_action(workspace::OpenLog.boxed_clone(), cx);
                     }),
             ));
+
+            if let Some(item) = self.build_lsp_button_item(cx) {
+                toolbar = toolbar.item(item);
+            }
+
+            if let Some(item) = self.build_edit_prediction_button_item(cx) {
+                toolbar = toolbar.item(item);
+            }
         }
 
         if title_bar_settings.show_user_menu {
@@ -648,13 +849,13 @@ impl NativeToolbarController {
     fn build_mode_switcher_item(
         &self,
         active_mode: ModeId,
-        _cx: &Context<Self>,
+        cx: &mut Context<Self>,
     ) -> NativeToolbarItem {
-        let (label, icon) = match active_mode {
-            ModeId::BROWSER => ("Browser", "globe"),
-            ModeId::EDITOR => ("Editor", "doc.text"),
-            ModeId::TERMINAL => ("Terminal", "terminal"),
-            _ => ("Browser", "globe"),
+        let (label, menu_icon, toolbar_icon) = match active_mode {
+            ModeId::BROWSER => ("Browser", "globe", IconName::Globe),
+            ModeId::EDITOR => ("Editor", "doc.text", IconName::File),
+            ModeId::TERMINAL => ("Terminal", "terminal", IconName::TerminalAlt),
+            _ => ("Browser", "globe", IconName::Globe),
         };
 
         let menu_items = vec![
@@ -662,12 +863,17 @@ impl NativeToolbarController {
             NativeToolbarMenuItem::action("Editor").icon("doc.text"),
             NativeToolbarMenuItem::action("Terminal").icon("terminal"),
         ];
+        let hosted_content = cx.new(|_| ModeSwitcherToolbarContent {
+            icon: toolbar_icon,
+            label: label.into(),
+        });
 
         let workspace = self.workspace.clone();
         NativeToolbarItem::MenuButton(
             NativeToolbarMenuButton::new("glass.mode_switcher", label, menu_items)
                 .tool_tip("Switch Mode")
-                .icon(icon)
+                .icon(menu_icon)
+                .content_view(hosted_content)
                 .shows_indicator(true)
                 .on_select(move |event, window, cx| {
                     if let Some(workspace) = workspace.upgrade() {
@@ -687,7 +893,7 @@ impl NativeToolbarController {
         )
     }
 
-    fn build_project_button_item(&self, cx: &Context<Self>) -> Option<NativeToolbarItem> {
+    fn build_project_button_item(&self, cx: &mut Context<Self>) -> Option<NativeToolbarItem> {
         let name = self.effective_active_worktree(cx).map(|worktree| {
             let worktree = worktree.read(cx);
             worktree.root_name().as_unix_str().to_string()
@@ -699,22 +905,28 @@ impl NativeToolbarController {
             "Open Project".to_string()
         };
 
+        let content = cx.new(|_| ProjectToolbarContent {
+            icon: IconName::Folder,
+            label: display_name.clone().into(),
+        });
+
         Some(NativeToolbarItem::Button(
             NativeToolbarButton::new("glass.project_name", display_name)
-                .icon("folder")
+                .content_view(content)
                 .on_click(move |_event, window, cx| {
                     window.dispatch_action(zed_actions::OpenRecent::default().boxed_clone(), cx);
                 }),
         ))
     }
 
-    fn build_branch_button_item(&self, cx: &Context<Self>) -> Option<NativeToolbarItem> {
+    fn build_branch_button_item(&self, cx: &mut Context<Self>) -> Option<NativeToolbarItem> {
         let effective_worktree = self.effective_active_worktree(cx)?;
         let repository = self.get_repository_for_worktree(&effective_worktree, cx)?;
 
-        let branch_name = {
+        let (branch_name, icon_info) = {
             let repo = repository.read(cx);
-            repo.branch
+            let branch_name = repo
+                .branch
                 .as_ref()
                 .map(|branch| branch.name())
                 .map(|name| util::truncate_and_trailoff(name, MAX_BRANCH_NAME_LENGTH))
@@ -726,14 +938,120 @@ impl NativeToolbarController {
                             .take(MAX_SHORT_SHA_LENGTH)
                             .collect::<String>()
                     })
-                })
-        }?;
+                });
 
+            let status = repo.status_summary();
+            let tracked = status.index + status.worktree;
+            let icon_info = if status.conflict > 0 {
+                (IconName::Warning, Color::VersionControlConflict)
+            } else if tracked.modified > 0 {
+                (IconName::SquareDot, Color::VersionControlModified)
+            } else if tracked.added > 0 || status.untracked > 0 {
+                (IconName::SquarePlus, Color::VersionControlAdded)
+            } else if tracked.deleted > 0 {
+                (IconName::SquareMinus, Color::VersionControlDeleted)
+            } else {
+                (IconName::GitBranch, Color::Muted)
+            };
+
+            (branch_name, icon_info)
+        };
+        let branch_name = branch_name?;
+
+        let branch_content = cx.new(|_| BranchToolbarContent {
+            icon: icon_info.0,
+            icon_color: icon_info.1,
+            branch_name: SharedString::from(branch_name.clone()),
+        });
         Some(NativeToolbarItem::Button(
             NativeToolbarButton::new("glass.branch_name", branch_name)
-                .icon("arrow.triangle.branch")
+                .content_view(branch_content)
                 .on_click(move |_event, window, cx| {
                     window.dispatch_action(zed_actions::git::Branch.boxed_clone(), cx);
+                }),
+        ))
+    }
+
+    fn build_lsp_button_item(&self, cx: &mut Context<Self>) -> Option<NativeToolbarItem> {
+        let lsp_button = self.right_item_view::<language_tools::lsp_button::LspButton>()?;
+        let workspace = self.workspace.clone();
+        let content = cx.new(|_| ToolbarMenuTriggerContent {
+            icon: IconName::BoltOutlined,
+            label: "Language Servers".into(),
+        });
+
+        Some(NativeToolbarItem::Button(
+            NativeToolbarButton::new("glass.status.language_servers", "Language Servers")
+                .tool_tip("Open Language Servers")
+                .content_view(content)
+                .on_click(move |_event, window, cx| {
+                    let Some(workspace) = workspace.upgrade() else {
+                        return;
+                    };
+                    let Some(controller) = workspace
+                        .read(cx)
+                        .titlebar_item()
+                        .and_then(|item| item.downcast::<NativeToolbarController>().ok())
+                    else {
+                        return;
+                    };
+                    controller.update(cx, |controller, cx| {
+                        let Some(lsp_menu) = lsp_button.read(cx).toolbar_menu() else {
+                            return;
+                        };
+                        controller.open_toolbar_context_menu(
+                            lsp_menu,
+                            "glass.status.language_servers",
+                            window,
+                            cx,
+                        );
+                    });
+                }),
+        ))
+    }
+
+    fn build_edit_prediction_button_item(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<NativeToolbarItem> {
+        let edit_prediction_button =
+            self.right_item_view::<edit_prediction_ui::EditPredictionButton>()?;
+        let workspace = self.workspace.clone();
+        let content = cx.new(|_| ToolbarMenuTriggerContent {
+            icon: IconName::ZedPredict,
+            label: "Edit Prediction".into(),
+        });
+
+        Some(NativeToolbarItem::Button(
+            NativeToolbarButton::new("glass.status.edit_prediction", "Edit Prediction")
+                .tool_tip("Open Edit Prediction")
+                .content_view(content)
+                .on_click(move |_event, window, cx| {
+                    let Some(workspace) = workspace.upgrade() else {
+                        return;
+                    };
+                    let Some(controller) = workspace
+                        .read(cx)
+                        .titlebar_item()
+                        .and_then(|item| item.downcast::<NativeToolbarController>().ok())
+                    else {
+                        return;
+                    };
+                    controller.update(cx, |controller, cx| {
+                        let Some(edit_prediction_menu) =
+                            edit_prediction_button.update(cx, |button, cx| {
+                                button.toolbar_menu(window, cx)
+                            })
+                        else {
+                            return;
+                        };
+                        controller.open_toolbar_context_menu(
+                            edit_prediction_menu,
+                            "glass.status.edit_prediction",
+                            window,
+                            cx,
+                        );
+                    });
                 }),
         ))
     }

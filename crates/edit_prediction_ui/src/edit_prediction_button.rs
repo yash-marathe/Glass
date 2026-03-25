@@ -585,6 +585,42 @@ impl EditPredictionButton {
         }
     }
 
+    pub fn toolbar_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<ContextMenu>> {
+        if DisableAiSettings::get_global(cx).disable_ai {
+            return None;
+        }
+
+        let provider = all_language_settings(None, cx).edit_predictions.provider;
+
+        match provider {
+            EditPredictionProvider::Copilot => {
+                let copilot = EditPredictionStore::try_global(cx)
+                    .and_then(|store| store.read(cx).copilot_for_project(&self.project.upgrade()?))?;
+                let status = copilot.read(cx).status();
+                Some(match status {
+                    Status::Authorized => self.build_copilot_context_menu(window, cx),
+                    _ => self.build_copilot_start_menu(window, cx),
+                })
+            }
+            EditPredictionProvider::Codestral => {
+                Some(self.build_codestral_context_menu(window, cx))
+            }
+            provider @ (EditPredictionProvider::OpenAiCompatibleApi
+            | EditPredictionProvider::Ollama
+            | EditPredictionProvider::Experimental(_)
+            | EditPredictionProvider::Zed
+            | EditPredictionProvider::Sweep
+            | EditPredictionProvider::Mercury) => {
+                Some(self.build_edit_prediction_context_menu(provider, window, cx))
+            }
+            EditPredictionProvider::None => None,
+        }
+    }
+
     fn add_provider_switching_section(
         &self,
         mut menu: ContextMenu,

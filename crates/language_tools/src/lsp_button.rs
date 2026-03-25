@@ -845,6 +845,10 @@ impl LspButton {
         lsp_button
     }
 
+    pub fn toolbar_menu(&self) -> Option<Entity<ContextMenu>> {
+        self.lsp_menu.clone()
+    }
+
     fn on_lsp_store_event(
         &mut self,
         e: &LspStoreEvent,
