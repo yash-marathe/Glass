@@ -43,17 +43,24 @@ struct BranchToolbarContent {
 
 impl Render for BranchToolbarContent {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .gap_0p5()
+        div()
+            .flex()
+            .size_full()
+            .items_center()
+            .justify_center()
             .child(
-                Icon::new(self.icon)
-                    .size(IconSize::XSmall)
-                    .color(self.icon_color),
-            )
-            .child(
-                Label::new(self.branch_name.clone())
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
+                h_flex()
+                    .gap_0p5()
+                    .child(
+                        Icon::new(self.icon)
+                            .size(IconSize::XSmall)
+                            .color(self.icon_color),
+                    )
+                    .child(
+                        Label::new(self.branch_name.clone())
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
             )
     }
 }
@@ -65,18 +72,25 @@ struct ModeSwitcherToolbarContent {
 
 impl Render for ModeSwitcherToolbarContent {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .gap_0p5()
-            .child(Icon::new(self.icon).size(IconSize::XSmall).color(Color::Muted))
+        div()
+            .flex()
+            .size_full()
+            .items_center()
+            .justify_center()
             .child(
-                Label::new(self.label.clone())
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-            )
-            .child(
-                Icon::new(IconName::ChevronDown)
-                    .size(IconSize::XSmall)
-                    .color(Color::Muted),
+                h_flex()
+                    .gap_0p5()
+                    .child(Icon::new(self.icon).size(IconSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new(self.label.clone())
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(
+                        Icon::new(IconName::ChevronDown)
+                            .size(IconSize::XSmall)
+                            .color(Color::Muted),
+                    ),
             )
     }
 }
@@ -88,13 +102,20 @@ struct ToolbarMenuTriggerContent {
 
 impl Render for ToolbarMenuTriggerContent {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .gap_0p5()
-            .child(Icon::new(self.icon).size(IconSize::XSmall).color(Color::Muted))
+        div()
+            .flex()
+            .size_full()
+            .items_center()
+            .justify_center()
             .child(
-                Label::new(self.label.clone())
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
+                h_flex()
+                    .gap_0p5()
+                    .child(Icon::new(self.icon).size(IconSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new(self.label.clone())
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
             )
     }
 }
@@ -106,13 +127,20 @@ struct ProjectToolbarContent {
 
 impl Render for ProjectToolbarContent {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .gap_0p5()
-            .child(Icon::new(self.icon).size(IconSize::XSmall).color(Color::Muted))
+        div()
+            .flex()
+            .size_full()
+            .items_center()
+            .justify_center()
             .child(
-                Label::new(self.label.clone())
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
+                h_flex()
+                    .gap_0p5()
+                    .child(Icon::new(self.icon).size(IconSize::XSmall).color(Color::Muted))
+                    .child(
+                        Label::new(self.label.clone())
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    ),
             )
     }
 }
