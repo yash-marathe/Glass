@@ -554,12 +554,15 @@ pub fn initialize_workspace(
             let image_info = cx.new(|_cx| ImageInfo::new(workspace));
             let line_ending_indicator =
                 cx.new(|_| line_ending_selector::LineEndingIndicator::default());
+            let runtime_status_button =
+                cx.new(|cx| app_runtime_ui::RuntimeStatusButton::new(workspace, window, cx));
 
             if let Some(title_bar) = workspace
                 .titlebar_item()
                 .and_then(|item| item.downcast::<title_bar::TitleBar>().ok())
             {
                 title_bar.update(cx, |title_bar, cx| {
+                    title_bar.add_right_item(runtime_status_button, window, cx);
                     title_bar.add_right_item(image_info, window, cx);
                     title_bar.add_right_item(line_ending_indicator, window, cx);
                     title_bar.add_right_item(active_toolchain_language, window, cx);
@@ -573,11 +576,14 @@ pub fn initialize_workspace(
         // On macOS, add LSP to the native toolbar controller for active pane tracking.
         #[cfg(target_os = "macos")]
         {
+            let runtime_status_button =
+                cx.new(|cx| app_runtime_ui::RuntimeStatusButton::new(workspace, window, cx));
             if let Some(controller) = workspace
                 .titlebar_item()
                 .and_then(|item| item.downcast::<title_bar::NativeToolbarController>().ok())
             {
                 controller.update(cx, |controller, cx| {
+                    controller.add_right_item(runtime_status_button, window, cx);
                     controller.add_right_item(lsp_button, window, cx);
                 });
             }
@@ -4815,6 +4821,7 @@ mod tests {
                 "agent",
                 "agents_sidebar",
                 "app_menu",
+                "app_runtime",
                 "assistant",
                 "assistant2",
                 "auto_update",
@@ -5066,6 +5073,7 @@ mod tests {
             audio::init(cx);
             notifications::init(app_state.client.clone(), app_state.user_store.clone(), cx);
             workspace::init(app_state.clone(), cx);
+            app_runtime_ui::init(cx);
             workspace_modes::init(cx);
             release_channel::init(Version::new(0, 0, 0), cx);
             command_palette::init(cx);
