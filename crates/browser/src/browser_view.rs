@@ -25,10 +25,9 @@ use crate::toolbar::BrowserToolbar;
 use editor::Editor;
 use gpui::{
     App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, NativePanel, NativePanelAnchor, NativePanelLevel, NativePanelMaterial,
-    NativePanelStyle, NativePopoverClickableRow, NativePopoverContentItem, NativeSearchFieldTarget,
-    ParentElement, Pixels, Render, Styled, Subscription, Task, Window, actions, div, prelude::*,
-    px,
+    IntoElement, NativePopoverClickableRow, NativePopoverContentItem, NativeSearchFieldTarget,
+    NativeSearchSuggestionMenu, ParentElement, Pixels, Render, Styled, Subscription, Task, Window,
+    actions, div, prelude::*, px,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_os = "macos"))]
@@ -170,7 +169,6 @@ pub struct BrowserView {
     new_tab_search_text: String,
     new_tab_suggestions: Vec<crate::history::HistoryMatch>,
     new_tab_selected_index: Option<usize>,
-    pub(crate) new_tab_search_bounds: Bounds<Pixels>,
     pending_new_tab_focus: bool,
     context_menu: Option<BrowserContextMenu>,
     pending_context_menu: Option<PendingContextMenu>,
@@ -231,7 +229,6 @@ impl BrowserView {
             new_tab_search_text: String::new(),
             new_tab_suggestions: Vec::new(),
             new_tab_selected_index: None,
-            new_tab_search_bounds: Bounds::default(),
             pending_new_tab_focus: false,
             context_menu: None,
             pending_context_menu: None,
@@ -331,9 +328,9 @@ impl BrowserView {
 
         self.new_tab_search_text = text.clone();
         self.new_tab_selected_index = None;
+        self.new_tab_suggestions.clear();
 
         if text.is_empty() {
-            self.new_tab_suggestions.clear();
         } else {
             self.search_new_tab_history(text, cx);
         }
@@ -426,10 +423,14 @@ impl BrowserView {
     fn search_new_tab_history(&mut self, query: String, cx: &mut Context<Self>) {
         let entries = self.history.read(cx).entries().to_vec();
         let executor = cx.background_executor().clone();
+        let requested_query = query.clone();
         cx.spawn(async move |this, cx| {
             let matches = crate::history::BrowserHistory::search(entries, query, 8, executor).await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
+                    if this.new_tab_search_text != requested_query {
+                        return;
+                    }
                     this.new_tab_suggestions = matches;
                     cx.notify();
                 });
@@ -438,13 +439,13 @@ impl BrowserView {
         .detach();
     }
 
-    fn show_new_tab_suggestion_panel(
+    fn show_new_tab_search_suggestion_menu(
         &self,
         browser_view_weak: gpui::WeakEntity<Self>,
         window: &mut Window,
     ) {
-        if self.new_tab_suggestions.is_empty() {
-            window.dismiss_native_panel();
+        if self.new_tab_row_count() == 0 {
+            window.dismiss_native_search_suggestion_menu();
             return;
         }
 
@@ -463,7 +464,7 @@ impl BrowserView {
                     .detail("Google")
                     .selected(selected == Some(row_index))
                     .on_click(move |window, cx| {
-                        window.dismiss_native_panel();
+                        window.dismiss_native_search_suggestion_menu();
                         let url = text_to_url(&query);
                         let _ = bv.update(cx, |bv, cx| {
                             bv.new_tab_search_text.clear();
@@ -501,7 +502,7 @@ impl BrowserView {
                     .detail(detail)
                     .selected(selected == Some(row_index))
                     .on_click(move |window, cx| {
-                        window.dismiss_native_panel();
+                        window.dismiss_native_search_suggestion_menu();
                         let _ = bv.update(cx, |bv, cx| {
                             bv.new_tab_search_text.clear();
                             bv.new_tab_suggestions.clear();
@@ -534,41 +535,13 @@ impl BrowserView {
             }
             + padding * 2.0;
         let panel_height = content_height.min(400.0);
-        let panel_width = 500.0;
-
-        // Position the panel directly below the search field.
-        // new_tab_search_bounds are in viewport-relative coordinates (the detail
-        // pane of the NSSplitViewController). We need to add the sidebar offset
-        // to convert to window-frame coordinates for the Point anchor.
-        let search = self.new_tab_search_bounds;
-        let search_center_x = f64::from(search.origin.x + search.size.width / 2.0);
-        let search_bottom_y = f64::from(search.origin.y + search.size.height);
-
-        let win_bounds = window.bounds();
-        let viewport = window.viewport_size();
-        let titlebar_height = f64::from(win_bounds.size.height) - f64::from(viewport.height);
-        let sidebar_offset = f64::from(win_bounds.size.width) - f64::from(viewport.width);
-
-        let panel_x =
-            f64::from(win_bounds.origin.x) + sidebar_offset + search_center_x - panel_width / 2.0;
-        let panel_y = f64::from(win_bounds.origin.y) + titlebar_height + search_bottom_y + 4.0;
-
-        let panel = NativePanel::new(panel_width, panel_height)
-            .style(NativePanelStyle::Borderless)
-            .level(NativePanelLevel::PopUpMenu)
-            .non_activating(true)
-            .has_shadow(true)
-            .corner_radius(10.0)
-            .material(NativePanelMaterial::Popover)
+        let menu = NativeSearchSuggestionMenu::new(500.0, panel_height)
             .on_close(|_, _, _| {})
             .items(items);
 
-        window.show_native_panel(
-            panel,
-            NativePanelAnchor::Point {
-                x: panel_x,
-                y: panel_y,
-            },
+        window.update_native_search_suggestion_menu(
+            menu,
+            NativeSearchFieldTarget::ContentElement("new-tab-search".into()),
         );
     }
 
@@ -1006,12 +979,9 @@ impl Render for BrowserView {
             .active_tab()
             .map(|t| t.read(cx).is_new_tab_page())
             .unwrap_or(false);
-        if is_new_tab
-            && !self.new_tab_search_text.is_empty()
-            && !self.new_tab_suggestions.is_empty()
-        {
+        if is_new_tab && self.new_tab_row_count() > 0 {
             let weak = cx.entity().downgrade();
-            self.show_new_tab_suggestion_panel(weak, window);
+            self.show_new_tab_search_suggestion_menu(weak, window);
         }
 
         let element = div()

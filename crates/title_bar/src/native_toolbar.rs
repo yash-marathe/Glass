@@ -7,13 +7,12 @@ use client::{Client, UserStore};
 use editor::Editor;
 use gpui::{
     Action, AnyElement, App, AppContext as _, Context, Corner, DismissEvent, Entity, Focusable,
-    IntoElement, NativePanel, NativePanelAnchor, NativePanelLevel, NativePanelMaterial,
-    NativePanelStyle, NativePopover, NativePopoverAnchor, NativePopoverBehavior,
-    NativePopoverClickableRow, NativePopoverContentItem, NativeToolbar, NativeToolbarButton,
-    NativeToolbarDisplayMode, NativeToolbarItem, NativeToolbarLabel, NativeToolbarMenuButton,
-    NativeToolbarMenuItem, NativeToolbarSearchEvent, NativeToolbarSearchField,
-    NativeToolbarSizeMode, Render, SharedString, Styled, Subscription, WeakEntity, Window,
-    anchored, deferred, div, point, px,
+    IntoElement, NativePopover, NativePopoverAnchor, NativePopoverBehavior,
+    NativePopoverClickableRow, NativePopoverContentItem, NativeSearchFieldTarget,
+    NativeSearchSuggestionMenu, NativeToolbar, NativeToolbarButton, NativeToolbarDisplayMode,
+    NativeToolbarItem, NativeToolbarLabel, NativeToolbarMenuButton, NativeToolbarMenuItem,
+    NativeToolbarSearchEvent, NativeToolbarSearchField, NativeToolbarSizeMode, Render,
+    SharedString, Styled, Subscription, WeakEntity, Window, anchored, deferred, div, point, px,
 };
 use image_viewer::ImageView;
 use language::LineEnding;
@@ -615,7 +614,7 @@ impl NativeToolbarController {
         if self.omnibox_panel_dirty {
             self.omnibox_panel_dirty = false;
             if self.omnibox_focused && !self.omnibox_text.is_empty() {
-                self.show_suggestion_panel(window);
+                self.show_search_suggestion_menu(window);
             }
         }
 
@@ -760,7 +759,10 @@ impl NativeToolbarController {
                         .tool_tip("Runtime Actions")
                         .icon("play.fill")
                         .on_click(|_event, window, cx| {
-                            window.dispatch_action(app_runtime_ui::OpenRuntimeActions.boxed_clone(), cx);
+                            window.dispatch_action(
+                                app_runtime_ui::OpenRuntimeActions.boxed_clone(),
+                                cx,
+                            );
                         }),
                 ));
 
@@ -1016,9 +1018,6 @@ impl NativeToolbarController {
                 .max_width(px(600.0))
                 .on_change(move |event: &NativeToolbarSearchEvent, window, cx| {
                     let text = event.text.clone();
-                    if text.is_empty() {
-                        window.dismiss_native_panel();
-                    }
                     if let Some(workspace) = workspace_for_change.upgrade() {
                         if let Some(controller) = workspace
                             .read(cx)
@@ -1028,14 +1027,17 @@ impl NativeToolbarController {
                             controller.update(cx, |controller, cx| {
                                 controller.omnibox_text = text.to_string();
                                 controller.omnibox_selected_index = None;
+                                controller.omnibox_suggestions.clear();
+                                controller.show_search_suggestion_menu(window);
                                 controller.search_history(text.to_string(), cx);
+                                cx.notify();
                             });
                         }
                     }
                 })
                 .on_submit(move |event: &NativeToolbarSearchEvent, window, cx| {
                     let text = event.text.clone();
-                    window.dismiss_native_panel();
+                    window.dismiss_native_search_suggestion_menu();
                     if let Some(workspace) = workspace_for_submit.upgrade() {
                         if let Some(controller) = workspace
                             .read(cx)
@@ -1074,7 +1076,7 @@ impl NativeToolbarController {
                                         Some(i) => (i + 1) % total,
                                         None => 0,
                                     });
-                                controller.show_suggestion_panel(window);
+                                controller.show_search_suggestion_menu(window);
                                 cx.notify();
                             });
                         }
@@ -1097,14 +1099,14 @@ impl NativeToolbarController {
                                         Some(0) | None => total.saturating_sub(1),
                                         Some(i) => i - 1,
                                     });
-                                controller.show_suggestion_panel(window);
+                                controller.show_search_suggestion_menu(window);
                                 cx.notify();
                             });
                         }
                     }
                 })
                 .on_cancel(move |_event: &NativeToolbarSearchEvent, window, cx| {
-                    window.dismiss_native_panel();
+                    window.dismiss_native_search_suggestion_menu();
                     window.blur_native_field_editor();
                     if let Some(workspace) = workspace_for_cancel.upgrade() {
                         if let Some(controller) = workspace
@@ -1134,7 +1136,7 @@ impl NativeToolbarController {
                     }
                 })
                 .on_end_editing(move |_event: &NativeToolbarSearchEvent, window, cx| {
-                    window.dismiss_native_panel();
+                    window.dismiss_native_search_suggestion_menu();
                     if let Some(workspace) = workspace_for_end_editing.upgrade() {
                         if let Some(controller) = workspace
                             .read(cx)
@@ -1291,9 +1293,9 @@ impl NativeToolbarController {
         None
     }
 
-    fn show_suggestion_panel(&self, window: &mut Window) {
-        if self.omnibox_suggestions.is_empty() {
-            window.dismiss_native_panel();
+    fn show_search_suggestion_menu(&self, window: &mut Window) {
+        if self.omnibox_row_count() == 0 {
+            window.dismiss_native_search_suggestion_menu();
             return;
         }
 
@@ -1314,7 +1316,7 @@ impl NativeToolbarController {
                     .detail("Google")
                     .selected(selected == Some(row_index))
                     .on_click(move |window, cx| {
-                        window.dismiss_native_panel();
+                        window.dismiss_native_search_suggestion_menu();
                         let url = text_to_url(&query);
                         if let Some(workspace) = search_workspace.upgrade() {
                             if let Some(controller) = workspace
@@ -1351,7 +1353,7 @@ impl NativeToolbarController {
                     .detail(detail)
                     .selected(selected == Some(row_index))
                     .on_click(move |window, cx| {
-                        window.dismiss_native_panel();
+                        window.dismiss_native_search_suggestion_menu();
                         if let Some(workspace) = navigate_workspace.upgrade() {
                             if let Some(controller) = workspace
                                 .read(cx)
@@ -1384,19 +1386,13 @@ impl NativeToolbarController {
             + padding * 2.0;
         let panel_height = content_height.min(400.0);
 
-        let panel = NativePanel::new(450.0, panel_height)
-            .style(NativePanelStyle::Borderless)
-            .level(NativePanelLevel::PopUpMenu)
-            .non_activating(true)
-            .has_shadow(true)
-            .corner_radius(10.0)
-            .material(NativePanelMaterial::Popover)
+        let menu = NativeSearchSuggestionMenu::new(450.0, panel_height)
             .on_close(|_, _, _| {})
             .items(items);
 
-        window.show_native_panel(
-            panel,
-            NativePanelAnchor::ToolbarItem("glass.omnibox".into()),
+        window.update_native_search_suggestion_menu(
+            menu,
+            NativeSearchFieldTarget::ToolbarItem("glass.omnibox".into()),
         );
     }
 
@@ -1870,11 +1866,15 @@ impl NativeToolbarController {
         };
 
         let executor = cx.background_executor().clone();
+        let requested_query = query.clone();
         cx.spawn(async move |this, cx| {
             let matches =
                 browser::history::BrowserHistory::search(entries, query, 8, executor).await;
             let _ = cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
+                    if this.omnibox_text != requested_query {
+                        return;
+                    }
                     this.omnibox_suggestions = matches;
                     this.omnibox_panel_dirty = true;
                     cx.notify();

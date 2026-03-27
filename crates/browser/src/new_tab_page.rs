@@ -1,6 +1,6 @@
 use crate::browser_view::BrowserView;
 use gpui::{
-    App, Entity, IntoElement, SearchChangeEvent, SearchSubmitEvent, Styled, WeakEntity, canvas,
+    App, Entity, IntoElement, SearchChangeEvent, SearchSubmitEvent, Styled, WeakEntity,
     native_search_field, prelude::*, px,
 };
 use ui::prelude::*;
@@ -18,19 +18,6 @@ pub fn render_new_tab_page(
     let browser_view_for_down: WeakEntity<BrowserView> = browser_view.downgrade();
     let browser_view_for_cancel: WeakEntity<BrowserView> = browser_view.downgrade();
     let browser_view_for_blur: WeakEntity<BrowserView> = browser_view.downgrade();
-    let browser_view_for_bounds = browser_view.clone();
-
-    let search_bounds_tracker = canvas(
-        move |bounds, _window, cx| {
-            browser_view_for_bounds.update(cx, |view, _| {
-                view.new_tab_search_bounds = bounds;
-            });
-        },
-        |_, _, _, _| {},
-    )
-    .absolute()
-    .size_full();
-
     div()
         .size_full()
         .flex()
@@ -70,7 +57,6 @@ pub fn render_new_tab_page(
                     div()
                         .relative()
                         .w(px(500.))
-                        .child(search_bounds_tracker)
                         .child(
                             native_search_field("new-tab-search")
                                 .placeholder("Search or enter URL")
@@ -106,14 +92,14 @@ pub fn render_new_tab_page(
                                     });
                                 })
                                 .on_cancel(move |window, cx| {
-                                    window.dismiss_native_panel();
+                                    window.dismiss_native_search_suggestion_menu();
                                     window.blur_native_field_editor();
                                     let _ = browser_view_for_cancel.update(cx, |bv, cx| {
                                         bv.new_tab_cancel(cx);
                                     });
                                 })
                                 .on_blur(move |_event: &SearchSubmitEvent, window, cx| {
-                                    window.dismiss_native_panel();
+                                    window.dismiss_native_search_suggestion_menu();
                                     let _ = browser_view_for_blur.update(cx, |bv, cx| {
                                         bv.new_tab_blur(cx);
                                         cx.notify();
