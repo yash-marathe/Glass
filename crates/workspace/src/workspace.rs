@@ -55,9 +55,9 @@ use gpui::{
     CursorStyle, Decorations, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle,
     Focusable, Global, HitboxBehavior, Hsla, KeyContext, Keystroke, ManagedView, MouseButton,
     PathPromptOptions, Point, PromptLevel, Render, ResizeEdge, Size, Stateful, Subscription,
-    SystemWindowTabController, Task, Tiling, WeakEntity, WindowBackgroundAppearance, WindowBounds,
-    WindowHandle, WindowId, WindowOptions, actions, canvas, point, px, relative, size,
-    transparent_black,
+    SystemWindowTabController, Task, Tiling, WeakEntity, WindowBackgroundAppearance,
+    WindowBounds, WindowHandle, WindowId, WindowOptions, actions, canvas, point, px, relative,
+    size, transparent_black,
 };
 pub use history_manager::*;
 pub use item::{
@@ -168,25 +168,23 @@ const DEFAULT_SIDEBAR_WIDTH: f64 = 240.0;
 #[cfg(target_os = "macos")]
 pub struct WorkspaceSidebarHost {
     active_mode: ModeId,
-    dock: Entity<Dock>,
+    left_dock: Entity<Dock>,
     mode_sidebar_views: HashMap<ModeId, AnyView>,
     workspace_sidebar_view: Option<AnyView>,
     workspace_sidebar_visible: bool,
     width: f64,
-    show_button_bar: bool,
 }
 
 #[cfg(target_os = "macos")]
 impl WorkspaceSidebarHost {
-    pub fn new(dock: Entity<Dock>, show_button_bar: bool) -> Self {
+    pub fn new(left_dock: Entity<Dock>) -> Self {
         Self {
             active_mode: ModeId::BROWSER,
-            dock,
+            left_dock,
             mode_sidebar_views: HashMap::default(),
             workspace_sidebar_view: None,
             workspace_sidebar_visible: false,
             width: DEFAULT_SIDEBAR_WIDTH,
-            show_button_bar,
         }
     }
 
@@ -241,9 +239,9 @@ impl WorkspaceSidebarHost {
         self.workspace_sidebar_visible
     }
 
-    pub fn set_dock(&mut self, dock: Entity<Dock>, cx: &mut Context<Self>) {
-        if self.dock.entity_id() != dock.entity_id() {
-            self.dock = dock;
+    pub fn set_left_dock(&mut self, left_dock: Entity<Dock>, cx: &mut Context<Self>) {
+        if self.left_dock.entity_id() != left_dock.entity_id() {
+            self.left_dock = left_dock;
             cx.notify();
         }
     }
@@ -271,15 +269,12 @@ impl Render for WorkspaceSidebarHost {
             self.workspace_sidebar_view
                 .as_ref()
                 .cloned()
-                .unwrap_or_else(|| self.dock.clone().into())
+                .unwrap_or_else(|| self.left_dock.clone().into())
         } else {
-            self.dock.clone().into()
+            self.left_dock.clone().into()
         };
 
-        let button_bar = self
-            .show_button_bar
-            .then(|| self.dock.read(cx).native_sidebar_button_bar())
-            .flatten();
+        let button_bar = self.left_dock.read(cx).native_sidebar_button_bar();
         div()
             .size_full()
             .flex()
@@ -1405,8 +1400,6 @@ pub struct Workspace {
     left_dock: Entity<Dock>,
     #[cfg(target_os = "macos")]
     pub(crate) workspace_sidebar_host: Entity<WorkspaceSidebarHost>,
-    #[cfg(target_os = "macos")]
-    pub(crate) right_dock_sidebar_host: Entity<WorkspaceSidebarHost>,
     bottom_dock: Entity<Dock>,
     right_dock: Entity<Dock>,
     panes: Vec<Entity<Pane>>,
@@ -1714,11 +1707,11 @@ impl Workspace {
         )
         .detach();
 
-        let left_dock_button_bar = DockButtonBar::new(weak_handle.clone(), DockPosition::Left, cx);
+        let dock_button_bar = DockButtonBar::new(weak_handle.clone(), cx);
         let left_dock = Dock::new(
             DockPosition::Left,
             modal_layer.clone(),
-            Some(left_dock_button_bar),
+            Some(dock_button_bar),
             window,
             cx,
         );
@@ -1729,31 +1722,10 @@ impl Workspace {
         #[cfg(target_os = "macos")]
         let workspace_sidebar_host = {
             let left_dock_clone = left_dock.clone();
-            cx.new(|_cx| WorkspaceSidebarHost::new(left_dock_clone, true))
+            cx.new(|_cx| WorkspaceSidebarHost::new(left_dock_clone))
         };
         let bottom_dock = Dock::new(DockPosition::Bottom, modal_layer.clone(), None, window, cx);
-        #[cfg(target_os = "macos")]
-        let right_dock_button_bar =
-            DockButtonBar::new(weak_handle.clone(), DockPosition::Right, cx);
-        #[cfg(target_os = "macos")]
-        let right_dock = Dock::new(
-            DockPosition::Right,
-            modal_layer.clone(),
-            Some(right_dock_button_bar),
-            window,
-            cx,
-        );
-        #[cfg(not(target_os = "macos"))]
         let right_dock = Dock::new(DockPosition::Right, modal_layer.clone(), None, window, cx);
-        #[cfg(target_os = "macos")]
-        right_dock.update(cx, |dock, _cx| {
-            dock.in_native_sidebar = true;
-        });
-        #[cfg(target_os = "macos")]
-        let right_dock_sidebar_host = {
-            let right_dock_clone = right_dock.clone();
-            cx.new(|_cx| WorkspaceSidebarHost::new(right_dock_clone, true))
-        };
         let session_id = app_state.session.read(cx).id().to_owned();
 
         let (serializable_items_tx, serializable_items_rx) =
@@ -1844,8 +1816,6 @@ impl Workspace {
             left_dock,
             #[cfg(target_os = "macos")]
             workspace_sidebar_host,
-            #[cfg(target_os = "macos")]
-            right_dock_sidebar_host,
             bottom_dock,
             right_dock,
             _panels_task: None,
@@ -5183,11 +5153,7 @@ impl Workspace {
             .has_mode_sidebar_view(self.active_mode)
         {
             !self.active_mode_sidebar_visible(cx)
-        } else if self
-            .workspace_sidebar_host
-            .read(cx)
-            .workspace_sidebar_visible()
-        {
+        } else if self.workspace_sidebar_host.read(cx).workspace_sidebar_visible() {
             false
         } else {
             !self.left_dock.read(cx).has_visible_content(window, cx)
@@ -5272,13 +5238,13 @@ impl Workspace {
                     });
                 }
 
-                entry.insert(PerWorkspaceModeView {
-                    view: registered.view,
-                    focus_handle: registered.focus_handle,
-                    sidebar_host: registered.sidebar_host,
-                    on_deactivate: registered.on_deactivate,
-                });
-            }
+                    entry.insert(PerWorkspaceModeView {
+                        view: registered.view,
+                        focus_handle: registered.focus_handle,
+                        sidebar_host: registered.sidebar_host,
+                        on_deactivate: registered.on_deactivate,
+                    });
+                }
         }
         self.mode_view_entry(mode_id)
     }
@@ -6866,11 +6832,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<Div> {
-        #[cfg(target_os = "macos")]
-        if matches!(position, DockPosition::Left | DockPosition::Right) {
-            return None;
-        }
-
         if self.zoomed_position == Some(position) {
             return None;
         }
@@ -6899,11 +6860,6 @@ impl Workspace {
         )
     }
 
-    #[cfg(target_os = "macos")]
-    pub(crate) fn left_dock_is_leading_sidebar(cx: &App) -> bool {
-        WorkspaceSettings::get_global(cx).left_dock_side == settings::DockSide::Left
-    }
-
     /// Wraps the entire mode-specific content with the native workspace sidebar shell.
     #[cfg(target_os = "macos")]
     fn render_with_workspace_sidebar_host(
@@ -6913,16 +6869,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
-        let left_dock_leading = Self::left_dock_is_leading_sidebar(cx);
-        let left_dock_width = workspace_sidebar_host.read(cx).width();
-        let left_dock_collapsed = self.workspace_sidebar_host_collapsed(window, cx);
-        let right_dock_width = self
-            .right_dock
-            .read(cx)
-            .active_panel_size(window, cx)
-            .map(|size| f64::from(size))
-            .unwrap_or(320.0);
-        let right_dock_collapsed = !self.right_dock.read(cx).has_visible_content(window, cx);
+        let sidebar_width = workspace_sidebar_host.read(cx).width();
+        let sidebar_collapsed = self.workspace_sidebar_host_collapsed(window, cx);
         let sidebar_titlebar_fill = match cx.theme().window_background_appearance() {
             WindowBackgroundAppearance::Opaque => Some(cx.theme().colors().panel_background),
             _ => None,
@@ -6934,42 +6882,13 @@ impl Workspace {
             .flex_row()
             .child(
                 native_sidebar("workspace-sidebar-host", &[""; 0])
-                    .sidebar_view(if left_dock_leading {
-                        workspace_sidebar_host.clone()
-                    } else {
-                        self.right_dock_sidebar_host.clone()
-                    })
-                    .sidebar_width(if left_dock_leading {
-                        left_dock_width
-                    } else {
-                        right_dock_width
-                    })
+                    .sidebar_view(workspace_sidebar_host)
+                    .sidebar_width(sidebar_width)
                     .min_sidebar_width(160.0)
                     .max_sidebar_width(480.0)
                     .manage_window_chrome(false)
                     .manage_toolbar(false)
-                    .collapsed(if left_dock_leading {
-                        left_dock_collapsed
-                    } else {
-                        right_dock_collapsed
-                    })
-                    .inspector_view(if left_dock_leading {
-                        self.right_dock_sidebar_host.clone()
-                    } else {
-                        workspace_sidebar_host
-                    })
-                    .inspector_width(if left_dock_leading {
-                        right_dock_width
-                    } else {
-                        left_dock_width
-                    })
-                    .min_inspector_width(160.0)
-                    .max_inspector_width(480.0)
-                    .inspector_collapsed(if left_dock_leading {
-                        right_dock_collapsed
-                    } else {
-                        left_dock_collapsed
-                    })
+                    .collapsed(sidebar_collapsed)
                     .sidebar_background_color(sidebar_titlebar_fill)
                     .size_full(),
             )
@@ -13240,34 +13159,6 @@ mod tests {
 
             workspace.toggle_sidebar(window, cx);
             assert!(workspace.active_mode_sidebar_visible(cx));
-        });
-    }
-
-    #[cfg(target_os = "macos")]
-    #[gpui::test]
-    async fn test_left_dock_side_controls_native_sidebar_layout(cx: &mut TestAppContext) {
-        init_test(cx);
-
-        cx.update_global(|store: &mut SettingsStore, cx| {
-            store.update_user_settings(cx, |settings| {
-                settings.workspace.left_dock_side = Some(settings::DockSide::Left);
-                settings.agent.get_or_insert_default().dock = Some(settings::DockPosition::Left);
-            });
-        });
-        cx.run_until_parked();
-        cx.update(|cx| {
-            assert!(Workspace::left_dock_is_leading_sidebar(cx));
-        });
-
-        cx.update_global(|store: &mut SettingsStore, cx| {
-            store.update_user_settings(cx, |settings| {
-                settings.workspace.left_dock_side = Some(settings::DockSide::Right);
-                settings.agent.get_or_insert_default().dock = Some(settings::DockPosition::Right);
-            });
-        });
-        cx.run_until_parked();
-        cx.update(|cx| {
-            assert!(!Workspace::left_dock_is_leading_sidebar(cx));
         });
     }
 

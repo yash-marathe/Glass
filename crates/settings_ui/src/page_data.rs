@@ -3757,7 +3757,7 @@ fn window_and_layout_page() -> SettingsPage {
         ]
     }
 
-    fn layout_section() -> [SettingsPageItem; 5] {
+    fn layout_section() -> [SettingsPageItem; 4] {
         [
             SettingsPageItem::SectionHeader("Layout"),
             SettingsPageItem::SettingItem(SettingItem {
@@ -3768,19 +3768,6 @@ fn window_and_layout_page() -> SettingsPage {
                     pick: |settings_content| settings_content.workspace.bottom_dock_layout.as_ref(),
                     write: |settings_content, value| {
                         settings_content.workspace.bottom_dock_layout = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Left Dock Side",
-                description: "Which side of the native macOS split view should render the logical left dock.",
-                field: Box::new(SettingField {
-                    json_path: Some("left_dock_side"),
-                    pick: |settings_content| settings_content.workspace.left_dock_side.as_ref(),
-                    write: |settings_content, value| {
-                        settings_content.workspace.left_dock_side = value;
                     },
                 }),
                 metadata: None,

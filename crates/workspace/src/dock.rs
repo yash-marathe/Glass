@@ -1,6 +1,6 @@
+use crate::{MultiWorkspace, Workspace};
 use crate::persistence::model::DockData;
 use crate::{DraggedDock, Event, ModalLayer, Pane};
-use crate::{MultiWorkspace, Workspace};
 use anyhow::Context as _;
 use client::proto;
 
@@ -33,110 +33,112 @@ actions!(
 
 pub(crate) const RESIZE_HANDLE_SIZE: Pixels = px(6.);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DockBarEntry {
-    Panel(EntityId),
-    WorkspaceSidebar,
-}
-
-struct DockButtonBarModel {
-    labels: Vec<SharedString>,
-    symbols: Vec<SharedString>,
-    entries: Vec<DockBarEntry>,
-    selected_segment: Option<usize>,
-}
-
-/// A dock-local button bar rendered inside the native sidebar host for one dock.
+/// A unified button bar that shows buttons for ALL panels from ALL docks.
+/// This is a separate entity to avoid borrow conflicts when reading workspace
+/// state during render - when this entity renders, the workspace update is complete.
 pub struct DockButtonBar {
     workspace: WeakEntity<Workspace>,
-    dock_position: DockPosition,
     _subscriptions: Vec<Subscription>,
 }
 
 impl DockButtonBar {
-    pub fn new(
-        workspace: WeakEntity<Workspace>,
-        dock_position: DockPosition,
-        cx: &mut App,
-    ) -> Entity<Self> {
+    pub fn new(workspace: WeakEntity<Workspace>, cx: &mut App) -> Entity<Self> {
         cx.new(|_cx| Self {
             workspace,
-            dock_position,
             _subscriptions: vec![],
-        })
-    }
-
-    fn model(&self, window: &Window, cx: &App) -> Option<DockButtonBarModel> {
-        let workspace = self.workspace.upgrade()?;
-        let workspace = workspace.read(cx);
-        if workspace.root_paths(cx).is_empty() {
-            return None;
-        }
-
-        let dock = workspace.dock_at_position(self.dock_position).read(cx);
-        let mut labels = Vec::new();
-        let mut symbols = Vec::new();
-        let mut entries = Vec::new();
-        let mut selected_segment = None;
-
-        for (index, entry) in dock.panel_entries.iter().enumerate() {
-            let panel = &entry.panel;
-            let Some(icon) = panel.icon(window, cx) else {
-                continue;
-            };
-            if dock.is_open() && dock.active_panel_index() == Some(index) {
-                selected_segment = Some(labels.len());
-            }
-
-            labels.push(
-                panel
-                    .icon_tooltip(window, cx)
-                    .unwrap_or(panel.persistent_name())
-                    .into(),
-            );
-            symbols.push(icon_to_sf_symbol(icon).into());
-            entries.push(DockBarEntry::Panel(panel.panel_id()));
-        }
-
-        let multi_workspace = window.root::<MultiWorkspace>().flatten();
-        if self.dock_position == DockPosition::Left
-            && let Some(multi_workspace) = multi_workspace
-            && multi_workspace.read(cx).multi_workspace_enabled(cx)
-            && multi_workspace.read(cx).sidebar().is_some()
-        {
-            if multi_workspace.read(cx).sidebar_open() {
-                selected_segment = Some(labels.len());
-            }
-            labels.push("Projects".into());
-            symbols.push("square.grid.2x2".into());
-            entries.push(DockBarEntry::WorkspaceSidebar);
-        }
-
-        (labels.len() > 1).then_some(DockButtonBarModel {
-            labels,
-            symbols,
-            entries,
-            selected_segment,
         })
     }
 }
 
 impl Render for DockButtonBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(model) = self.model(window, cx) else {
+        #[derive(Clone, Copy)]
+        enum DockBarEntry {
+            Panel(EntityId),
+            WorkspaceSidebar,
+        }
+
+        let Some(workspace) = self.workspace.upgrade() else {
             return div().into_any_element();
         };
 
-        let callback_panel_entries = model.entries.clone();
-        let callback_multi_workspace = window.root::<MultiWorkspace>().flatten();
-        let label_strs: Vec<&str> = model.labels.iter().map(|s| s.as_ref()).collect();
-        let symbol_strs: Vec<&str> = model.symbols.iter().map(|s| s.as_ref()).collect();
+        let workspace_read = workspace.read(cx);
+        if workspace_read.root_paths(cx).is_empty() {
+            return div().into_any_element();
+        }
+
+        let all_docks = [
+            (&workspace_read.left_dock, DockPosition::Left),
+            (&workspace_read.bottom_dock, DockPosition::Bottom),
+            (&workspace_read.right_dock, DockPosition::Right),
+        ];
+
+        // Collect all panels from all docks for the segmented control.
+        let mut panel_labels: Vec<SharedString> = Vec::new();
+        let mut panel_symbols: Vec<SharedString> = Vec::new();
+        let mut panel_entries: Vec<DockBarEntry> = Vec::new();
+        let mut selected_segment: Option<usize> = None;
+
+        for (dock_entity, dock_position) in &all_docks {
+            // Skip bottom dock panels — they have their own dock and shouldn't
+            // appear in the sidebar segmented control.
+            if *dock_position == DockPosition::Bottom {
+                continue;
+            }
+
+            let dock = dock_entity.read(cx);
+            let active_index = dock.active_panel_index();
+            let is_open = dock.is_open();
+
+            for (i, entry) in dock.panel_entries.iter().enumerate() {
+                let panel = &entry.panel;
+                // Skip the agent panel — it has a dedicated button in the native toolbar.
+                if panel.persistent_name() == "AgentPanel" {
+                    continue;
+                }
+                let Some(icon) = panel.icon(window, cx) else {
+                    continue;
+                };
+                let name = panel
+                    .icon_tooltip(window, cx)
+                    .unwrap_or(panel.persistent_name());
+                let segment_idx = panel_labels.len();
+
+                // Track the first active+visible panel as the selected segment
+                if is_open && Some(i) == active_index && selected_segment.is_none() {
+                    selected_segment = Some(segment_idx);
+                }
+
+                panel_labels.push(name.into());
+                panel_symbols.push(icon_to_sf_symbol(icon).into());
+                panel_entries.push(DockBarEntry::Panel(panel.panel_id()));
+            }
+        }
+
+        let multi_workspace = window.root::<MultiWorkspace>().flatten();
+        if let Some(multi_workspace) = multi_workspace.clone()
+            && multi_workspace.read(cx).multi_workspace_enabled(cx)
+            && multi_workspace.read(cx).sidebar().is_some()
+        {
+            if multi_workspace.read(cx).sidebar_open() {
+                selected_segment = Some(panel_labels.len());
+            }
+            panel_labels.push("Projects".into());
+            panel_symbols.push("square.grid.2x2".into());
+            panel_entries.push(DockBarEntry::WorkspaceSidebar);
+        }
+
+        if panel_labels.is_empty() {
+            return div().into_any_element();
+        }
+
+        let callback_panel_entries = panel_entries.clone();
+        let callback_multi_workspace = multi_workspace.clone();
+        let label_strs: Vec<&str> = panel_labels.iter().map(|s| s.as_ref()).collect();
+        let symbol_strs: Vec<&str> = panel_symbols.iter().map(|s| s.as_ref()).collect();
         let mut segmented_control_hasher = DefaultHasher::new();
-        self.dock_position
-            .label()
-            .hash(&mut segmented_control_hasher);
-        model.labels.hash(&mut segmented_control_hasher);
-        model.symbols.hash(&mut segmented_control_hasher);
+        panel_labels.hash(&mut segmented_control_hasher);
+        panel_symbols.hash(&mut segmented_control_hasher);
         let segmented_control_id = ("dock-panels", segmented_control_hasher.finish());
 
         let mut group = native_toggle_group(segmented_control_id, &label_strs)
@@ -184,7 +186,7 @@ impl Render for DockButtonBar {
                 }),
             );
 
-        if let Some(index) = model.selected_segment {
+        if let Some(index) = selected_segment {
             let last_segment_index = label_strs.len().saturating_sub(1);
             group = group.selected_index(index.min(last_segment_index));
         }
@@ -1309,154 +1311,5 @@ pub mod test {
         fn focus_handle(&self, _cx: &App) -> FocusHandle {
             self.focus_handle.clone()
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Workspace;
-    use fs::FakeFs;
-    use gpui::{App, Context, TestAppContext, Window, actions, div};
-    use project::Project;
-    use settings::SettingsStore;
-
-    struct TestIconPanel {
-        position: DockPosition,
-        focus_handle: FocusHandle,
-    }
-
-    actions!(dock_button_bar_test, [ToggleTestIconPanel]);
-
-    impl EventEmitter<PanelEvent> for TestIconPanel {}
-
-    impl TestIconPanel {
-        fn new(position: DockPosition, cx: &mut App) -> Self {
-            Self {
-                position,
-                focus_handle: cx.focus_handle(),
-            }
-        }
-    }
-
-    impl Render for TestIconPanel {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            div().id("test-icon-panel").track_focus(&self.focus_handle)
-        }
-    }
-
-    impl Focusable for TestIconPanel {
-        fn focus_handle(&self, _cx: &App) -> FocusHandle {
-            self.focus_handle.clone()
-        }
-    }
-
-    impl Panel for TestIconPanel {
-        fn persistent_name() -> &'static str {
-            "TestIconPanel"
-        }
-
-        fn panel_key() -> &'static str {
-            "TestIconPanel"
-        }
-
-        fn position(&self, _window: &Window, _cx: &App) -> DockPosition {
-            self.position
-        }
-
-        fn position_is_valid(&self, _position: DockPosition) -> bool {
-            true
-        }
-
-        fn set_position(
-            &mut self,
-            position: DockPosition,
-            _window: &mut Window,
-            cx: &mut Context<Self>,
-        ) {
-            self.position = position;
-            cx.update_global::<SettingsStore, _>(|_, _| {});
-        }
-
-        fn size(&self, _window: &Window, _cx: &App) -> Pixels {
-            px(240.)
-        }
-
-        fn set_size(
-            &mut self,
-            _size: Option<Pixels>,
-            _window: &mut Window,
-            _cx: &mut Context<Self>,
-        ) {
-        }
-
-        fn icon(&self, _window: &Window, _cx: &App) -> Option<ui::IconName> {
-            Some(ui::IconName::FileTree)
-        }
-
-        fn icon_tooltip(&self, _window: &Window, _cx: &App) -> Option<&'static str> {
-            Some(match self.position {
-                DockPosition::Left => "Left Test Panel",
-                DockPosition::Right => "Right Test Panel",
-                DockPosition::Bottom => "Bottom Test Panel",
-            })
-        }
-
-        fn toggle_action(&self) -> Box<dyn Action> {
-            ToggleTestIconPanel.boxed_clone()
-        }
-
-        fn activation_priority(&self) -> u32 {
-            0
-        }
-    }
-
-    fn init_test(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let settings_store = SettingsStore::test(cx);
-            cx.set_global(settings_store);
-            cx.set_global(db::AppDatabase::test_new());
-            theme::init(theme::LoadThemes::JustBase, cx);
-        });
-    }
-
-    #[gpui::test]
-    async fn test_dock_button_bar_scopes_entries_to_its_dock(cx: &mut TestAppContext) {
-        init_test(cx);
-
-        let fs = FakeFs::new(cx.executor());
-        let project = Project::test(fs, ["root".as_ref()], cx).await;
-        let (workspace, cx) =
-            cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
-
-        let (left_bar, right_bar, window_handle) =
-            workspace.update_in(cx, |workspace, window, cx| {
-                let left_panel = cx.new(|cx| TestIconPanel::new(DockPosition::Left, cx));
-                let right_panel = cx.new(|cx| TestIconPanel::new(DockPosition::Right, cx));
-                workspace.add_panel(left_panel, window, cx);
-                workspace.add_panel(right_panel, window, cx);
-
-                let workspace = cx.entity().downgrade();
-                let left_bar = DockButtonBar::new(workspace.clone(), DockPosition::Left, cx);
-                let right_bar = DockButtonBar::new(workspace, DockPosition::Right, cx);
-
-                (left_bar, right_bar, window.window_handle())
-            });
-
-        let (left_entries, right_entries) = cx
-            .update_window(window_handle.into(), |_, window, cx| {
-                let left_entries = left_bar
-                    .read_with(cx, |bar, cx| bar.model(window, cx).unwrap().entries.clone());
-                let right_entries = right_bar
-                    .read_with(cx, |bar, cx| bar.model(window, cx).unwrap().entries.clone());
-                (left_entries, right_entries)
-            })
-            .unwrap();
-
-        assert_eq!(left_entries.len(), 1);
-        assert_eq!(right_entries.len(), 1);
-        assert!(matches!(left_entries[0], DockBarEntry::Panel(_)));
-        assert!(matches!(right_entries[0], DockBarEntry::Panel(_)));
-        assert_ne!(left_entries[0], right_entries[0]);
     }
 }

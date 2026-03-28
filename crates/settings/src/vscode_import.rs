@@ -932,7 +932,6 @@ impl VsCodeSettings {
                 _ => None,
             }),
             bottom_dock_layout: None,
-            left_dock_side: None,
             centered_layout: None,
             close_on_file_delete: None,
             close_panel_on_toggle: None,

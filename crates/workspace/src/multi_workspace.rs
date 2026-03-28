@@ -1,11 +1,11 @@
 use anyhow::Result;
-#[cfg(target_os = "macos")]
-use gpui::native_sidebar;
 use gpui::{
     AnyView, App, Context, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
-    ManagedView, Pixels, Render, Subscription, Task, Tiling, Window, WindowBackgroundAppearance,
-    WindowId, actions,
+    ManagedView, Pixels, Render, Subscription, Task, Tiling, Window,
+    WindowBackgroundAppearance, WindowId, actions,
 };
+#[cfg(target_os = "macos")]
+use gpui::native_sidebar;
 #[cfg(not(target_os = "macos"))]
 use gpui::{MouseButton, deferred, px};
 use project::Project;
@@ -171,7 +171,7 @@ impl MultiWorkspace {
         #[cfg(target_os = "macos")]
         let workspace_sidebar_host = {
             let left_dock = workspace.read(cx).left_dock().clone();
-            cx.new(|_cx| WorkspaceSidebarHost::new(left_dock, true))
+            cx.new(|_cx| WorkspaceSidebarHost::new(left_dock))
         };
         Self {
             window_id: window.window_handle().window_id(),
@@ -397,7 +397,7 @@ impl MultiWorkspace {
             )
         };
         self.workspace_sidebar_host.update(cx, |sidebar, cx| {
-            sidebar.set_dock(left_dock, cx);
+            sidebar.set_left_dock(left_dock, cx);
             sidebar.set_mode(mode, cx);
             if let Some(view) = mode_sidebar_view {
                 sidebar.set_mode_sidebar_view(mode, view, cx);
@@ -977,36 +977,10 @@ impl Render for MultiWorkspace {
 
                     #[cfg(target_os = "macos")]
                     let workspace_content = {
-                        let workspace_entity = self.workspace().clone();
-                        let (
-                            right_dock_host,
-                            left_dock_collapsed,
-                            right_dock_width,
-                            right_dock_collapsed,
-                        ) = {
-                            let workspace = workspace_entity.read(cx);
-                            let right_dock_host = workspace.right_dock_sidebar_host.clone();
-                            let left_dock_collapsed =
-                                workspace.workspace_sidebar_host_collapsed(window, cx);
-                            let right_dock_width = workspace
-                                .right_dock()
-                                .read(cx)
-                                .active_panel_size(window, cx)
-                                .map(|size| f64::from(size))
-                                .unwrap_or(320.0);
-                            let right_dock_collapsed = !workspace
-                                .right_dock()
-                                .read(cx)
-                                .has_visible_content(window, cx);
-                            (
-                                right_dock_host,
-                                left_dock_collapsed,
-                                right_dock_width,
-                                right_dock_collapsed,
-                            )
-                        };
-                        let left_dock_leading = Workspace::left_dock_is_leading_sidebar(cx);
-                        let left_dock_width = self.workspace_sidebar_host.read(cx).width();
+                        let workspace = self.workspace().read(cx);
+                        let sidebar_collapsed =
+                            workspace.workspace_sidebar_host_collapsed(window, cx);
+                        let sidebar_width = self.workspace_sidebar_host.read(cx).width();
                         let sidebar_titlebar_fill = match cx.theme().window_background_appearance()
                         {
                             WindowBackgroundAppearance::Opaque => {
@@ -1021,42 +995,13 @@ impl Render for MultiWorkspace {
                             .flex_row()
                             .child(
                                 native_sidebar("workspace-sidebar-host-shell", &[""; 0])
-                                    .sidebar_view(if left_dock_leading {
-                                        self.workspace_sidebar_host.clone()
-                                    } else {
-                                        right_dock_host.clone()
-                                    })
-                                    .sidebar_width(if left_dock_leading {
-                                        left_dock_width
-                                    } else {
-                                        right_dock_width
-                                    })
+                                    .sidebar_view(self.workspace_sidebar_host.clone())
+                                    .sidebar_width(sidebar_width)
                                     .min_sidebar_width(160.0)
                                     .max_sidebar_width(480.0)
                                     .manage_window_chrome(false)
                                     .manage_toolbar(false)
-                                    .collapsed(if left_dock_leading {
-                                        left_dock_collapsed
-                                    } else {
-                                        right_dock_collapsed
-                                    })
-                                    .inspector_view(if left_dock_leading {
-                                        right_dock_host.clone()
-                                    } else {
-                                        self.workspace_sidebar_host.clone()
-                                    })
-                                    .inspector_width(if left_dock_leading {
-                                        right_dock_width
-                                    } else {
-                                        left_dock_width
-                                    })
-                                    .min_inspector_width(160.0)
-                                    .max_inspector_width(480.0)
-                                    .inspector_collapsed(if left_dock_leading {
-                                        right_dock_collapsed
-                                    } else {
-                                        left_dock_collapsed
-                                    })
+                                    .collapsed(sidebar_collapsed)
                                     .sidebar_background_color(sidebar_titlebar_fill)
                                     .size_full(),
                             )
@@ -1069,9 +1014,7 @@ impl Render for MultiWorkspace {
             window,
             cx,
             Tiling {
-                left: cfg!(not(target_os = "macos"))
-                    && multi_workspace_enabled
-                    && self.sidebar_open(),
+                left: cfg!(not(target_os = "macos")) && multi_workspace_enabled && self.sidebar_open(),
                 ..Tiling::default()
             },
         )
@@ -1136,7 +1079,7 @@ mod tests {
                         view: browser_view.into(),
                         focus_handle,
                         titlebar_center_view: None,
-                        sidebar_host: None,
+                        sidebar: None,
                         on_deactivate: None,
                     }
                 }),
