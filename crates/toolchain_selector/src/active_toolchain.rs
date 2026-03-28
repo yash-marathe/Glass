@@ -230,6 +230,12 @@ impl ActiveToolchain {
             }
         })
     }
+
+    pub fn active_toolchain_name(&self) -> Option<&str> {
+        self.active_toolchain
+            .as_ref()
+            .map(|toolchain| toolchain.name.as_ref())
+    }
 }
 
 impl Render for ActiveToolchain {

@@ -42,7 +42,7 @@ pub fn handle_cef_subprocess() -> anyhow::Result<()> {
 
 use gpui::{AnyView, App, AppContext as _, Entity, Focusable};
 use std::sync::Arc;
-use workspace_modes::{ModeId, ModeSidebarController, ModeViewRegistry, RegisteredModeView};
+use workspace_modes::{ModeId, ModeSidebarHost, ModeViewRegistry, RegisteredModeView};
 
 fn browser_sidebar_visible(view: &AnyView, cx: &App) -> bool {
     view.clone()
@@ -89,16 +89,16 @@ pub fn init(cx: &mut App) {
             let focus_handle = browser_view.focus_handle(cx);
 
             #[cfg(target_os = "macos")]
-            let sidebar = {
+            let sidebar_host = {
                 let panel = browser_view.update(cx, |bv, cx| bv.ensure_native_sidebar_panel(cx));
-                Some(ModeSidebarController {
+                Some(ModeSidebarHost {
                     sidebar_view: gpui::AnyView::from(panel),
                     is_visible: browser_sidebar_visible,
                     toggle: toggle_browser_sidebar,
                 })
             };
             #[cfg(not(target_os = "macos"))]
-            let sidebar = None;
+            let sidebar_host = None;
 
             let deactivate_view = browser_view.downgrade();
             let on_deactivate: Arc<dyn Fn(&mut App) + Send + Sync> =
@@ -114,7 +114,7 @@ pub fn init(cx: &mut App) {
                 view: browser_view.into(),
                 focus_handle,
                 titlebar_center_view: None,
-                sidebar,
+                sidebar_host,
                 on_deactivate: Some(on_deactivate),
             }
         }),

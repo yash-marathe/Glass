@@ -11,8 +11,9 @@ use agent_ui::{
 use chrono::Utc;
 use editor::Editor;
 use gpui::{
-    Action as _, AnyElement, App, Context, Entity, FocusHandle, Focusable, ListState, Pixels,
-    Render, SharedString, WeakEntity, Window, WindowHandle, list, prelude::*, px,
+    Action as _, AnyElement, App, Context, DismissEvent, Entity, FocusHandle, Focusable,
+    ListState, NativePopover, NativePopoverAnchor, NativePopoverBehavior, Pixels, Render,
+    SharedString, WeakEntity, Window, WindowHandle, list, prelude::*, px,
 };
 use menu::{
     Cancel, Confirm, SelectChild, SelectFirst, SelectLast, SelectNext, SelectParent, SelectPrevious,
@@ -24,13 +25,16 @@ use ui::utils::platform_title_bar_height;
 use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::path::Path;
+#[cfg(not(target_os = "macos"))]
 use std::rc::Rc;
 use std::sync::Arc;
 use theme::ActiveTheme;
 use ui::{
     AgentThreadStatus, CommonAnimationExt, ContextMenu, Divider, HighlightedLabel, KeyBinding,
-    PopoverMenu, PopoverMenuHandle, Tab, ThreadItem, TintColor, Tooltip, WithScrollbar, prelude::*,
+    PopoverMenuHandle, Tab, ThreadItem, TintColor, Tooltip, WithScrollbar, prelude::*,
 };
+#[cfg(not(target_os = "macos"))]
+use ui::PopoverMenu;
 use util::ResultExt as _;
 use util::path_list::PathList;
 use workspace::{
@@ -1401,6 +1405,134 @@ impl Sidebar {
             .into_any_element()
     }
 
+    fn build_project_header_context_menu(
+        &self,
+        workspace: Entity<Workspace>,
+        workspace_for_remove: Entity<Workspace>,
+        multi_workspace: WeakEntity<MultiWorkspace>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<ContextMenu> {
+        let worktrees: Vec<_> = workspace
+            .read(cx)
+            .visible_worktrees(cx)
+            .map(|worktree| {
+                let worktree_read = worktree.read(cx);
+                let id = worktree_read.id();
+                let name: SharedString = worktree_read.root_name().as_unix_str().to_string().into();
+                (id, name)
+            })
+            .collect();
+
+        let worktree_count = worktrees.len();
+
+        ContextMenu::build_persistent(window, cx, move |menu, _window, cx| {
+            let mut menu = menu
+                .header("Project Folders")
+                .end_slot_action(Box::new(menu::EndSlot));
+
+            for (worktree_id, name) in &worktrees {
+                let worktree_id = *worktree_id;
+                let workspace_for_worktree = workspace.clone();
+                let workspace_for_remove_worktree = workspace_for_remove.clone();
+                let multi_workspace_for_worktree = multi_workspace.clone();
+
+                let remove_handler = move |window: &mut Window, cx: &mut App| {
+                    if worktree_count <= 1 {
+                        if let Some(multi_workspace) = multi_workspace_for_worktree.upgrade() {
+                            let workspace = workspace_for_remove_worktree.clone();
+                            multi_workspace.update(cx, |multi_workspace, cx| {
+                                if let Some(index) = multi_workspace
+                                    .workspaces()
+                                    .iter()
+                                    .position(|candidate| *candidate == workspace)
+                                {
+                                    multi_workspace.remove_workspace(index, window, cx);
+                                }
+                            });
+                        }
+                    } else {
+                        workspace_for_worktree.update(cx, |workspace, cx| {
+                            workspace.project().update(cx, |project, cx| {
+                                project.remove_worktree(worktree_id, cx);
+                            });
+                        });
+                    }
+                };
+
+                menu = menu.entry_with_end_slot_on_hover(
+                    name.clone(),
+                    None,
+                    |_, _| {},
+                    IconName::Close,
+                    "Remove Folder".into(),
+                    remove_handler,
+                );
+            }
+
+            let workspace_for_add = workspace.clone();
+            let multi_workspace_for_add = multi_workspace.clone();
+            let menu = menu.separator().entry(
+                "Add Folder to Project",
+                Some(Box::new(AddFolderToProject)),
+                move |window, cx| {
+                    if let Some(multi_workspace) = multi_workspace_for_add.upgrade() {
+                        multi_workspace.update(cx, |multi_workspace, cx| {
+                            multi_workspace.activate(workspace_for_add.clone(), cx);
+                        });
+                    }
+                    workspace_for_add.update(cx, |workspace, cx| {
+                        workspace.add_folder_to_project(&AddFolderToProject, window, cx);
+                    });
+                },
+            );
+
+            let workspace_count = multi_workspace
+                .upgrade()
+                .map_or(0, |multi_workspace| multi_workspace.read(cx).workspaces().len());
+            let menu = if workspace_count > 1 {
+                let workspace_for_move = workspace.clone();
+                let multi_workspace_for_move = multi_workspace.clone();
+                menu.entry(
+                    "Move to New Window",
+                    Some(Box::new(zed_actions::agents_sidebar::MoveWorkspaceToNewWindow)),
+                    move |window, cx| {
+                        if let Some(multi_workspace) = multi_workspace_for_move.upgrade() {
+                            multi_workspace.update(cx, |multi_workspace, cx| {
+                                if let Some(index) = multi_workspace
+                                    .workspaces()
+                                    .iter()
+                                    .position(|candidate| *candidate == workspace_for_move)
+                                {
+                                    multi_workspace.move_workspace_to_new_window(index, window, cx);
+                                }
+                            });
+                        }
+                    },
+                )
+            } else {
+                menu
+            };
+
+            let workspace_for_remove = workspace_for_remove.clone();
+            let multi_workspace_for_remove = multi_workspace.clone();
+            menu.separator().entry("Remove Project", None, move |window, cx| {
+                if let Some(multi_workspace) = multi_workspace_for_remove.upgrade() {
+                    let workspace = workspace_for_remove.clone();
+                    multi_workspace.update(cx, |multi_workspace, cx| {
+                        if let Some(index) = multi_workspace
+                            .workspaces()
+                            .iter()
+                            .position(|candidate| *candidate == workspace)
+                        {
+                            multi_workspace.remove_workspace(index, window, cx);
+                        }
+                    });
+                }
+            })
+        })
+    }
+
     fn render_project_header_menu(
         &self,
         ix: usize,
@@ -1408,177 +1540,110 @@ impl Sidebar {
         workspace: &Entity<Workspace>,
         workspace_for_remove: &Entity<Workspace>,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
         let workspace_for_menu = workspace.clone();
         let workspace_for_remove = workspace_for_remove.clone();
         let multi_workspace = self.multi_workspace.clone();
         let this = cx.weak_entity();
+        let trigger_id = SharedString::from(format!("{id_prefix}-ellipsis-menu-{ix}"));
 
-        PopoverMenu::new(format!("{id_prefix}project-header-menu-{ix}"))
-            .on_open(Rc::new({
-                let this = this.clone();
-                move |_window, cx| {
-                    this.update(cx, |sidebar, cx| {
-                        sidebar.project_header_menu_ix = Some(ix);
-                        cx.notify();
-                    })
-                    .ok();
-                }
-            }))
-            .menu(move |window, cx| {
-                let workspace = workspace_for_menu.clone();
-                let workspace_for_remove = workspace_for_remove.clone();
-                let multi_workspace = multi_workspace.clone();
-
-                let menu = ContextMenu::build_persistent(window, cx, move |menu, _window, cx| {
-                    let worktrees: Vec<_> = workspace
-                        .read(cx)
-                        .visible_worktrees(cx)
-                        .map(|worktree| {
-                            let worktree_read = worktree.read(cx);
-                            let id = worktree_read.id();
-                            let name: SharedString =
-                                worktree_read.root_name().as_unix_str().to_string().into();
-                            (id, name)
-                        })
-                        .collect();
-
-                    let worktree_count = worktrees.len();
-
-                    let mut menu = menu
-                        .header("Project Folders")
-                        .end_slot_action(Box::new(menu::EndSlot));
-
-                    for (worktree_id, name) in &worktrees {
-                        let worktree_id = *worktree_id;
-                        let workspace_for_worktree = workspace.clone();
-                        let workspace_for_remove_worktree = workspace_for_remove.clone();
-                        let multi_workspace_for_worktree = multi_workspace.clone();
-
-                        let remove_handler = move |window: &mut Window, cx: &mut App| {
-                            if worktree_count <= 1 {
-                                if let Some(mw) = multi_workspace_for_worktree.upgrade() {
-                                    let ws = workspace_for_remove_worktree.clone();
-                                    mw.update(cx, |multi_workspace, cx| {
-                                        if let Some(index) = multi_workspace
-                                            .workspaces()
-                                            .iter()
-                                            .position(|w| *w == ws)
-                                        {
-                                            multi_workspace.remove_workspace(index, window, cx);
-                                        }
-                                    });
-                                }
-                            } else {
-                                workspace_for_worktree.update(cx, |workspace, cx| {
-                                    workspace.project().update(cx, |project, cx| {
-                                        project.remove_worktree(worktree_id, cx);
-                                    });
-                                });
-                            }
-                        };
-
-                        menu = menu.entry_with_end_slot_on_hover(
-                            name.clone(),
-                            None,
-                            |_, _| {},
-                            IconName::Close,
-                            "Remove Folder".into(),
-                            remove_handler,
-                        );
-                    }
-
-                    let workspace_for_add = workspace.clone();
-                    let multi_workspace_for_add = multi_workspace.clone();
-                    let menu = menu.separator().entry(
-                        "Add Folder to Project",
-                        Some(Box::new(AddFolderToProject)),
-                        move |window, cx| {
-                            if let Some(mw) = multi_workspace_for_add.upgrade() {
-                                mw.update(cx, |mw, cx| {
-                                    mw.activate(workspace_for_add.clone(), cx);
-                                });
-                            }
-                            workspace_for_add.update(cx, |workspace, cx| {
-                                workspace.add_folder_to_project(&AddFolderToProject, window, cx);
-                            });
-                        },
+        #[cfg(target_os = "macos")]
+        {
+            return IconButton::new(trigger_id.clone(), IconName::Ellipsis)
+                .selected_style(ButtonStyle::Tinted(TintColor::Accent))
+                .icon_size(IconSize::Small)
+                .icon_color(Color::Muted)
+                .on_click(cx.listener(move |sidebar, _, window, cx| {
+                    sidebar.project_header_menu_ix = Some(ix);
+                    let menu = sidebar.build_project_header_context_menu(
+                        workspace_for_menu.clone(),
+                        workspace_for_remove.clone(),
+                        multi_workspace.clone(),
+                        window,
+                        cx,
                     );
 
-                    let workspace_count = multi_workspace
-                        .upgrade()
-                        .map_or(0, |mw| mw.read(cx).workspaces().len());
-                    let menu = if workspace_count > 1 {
-                        let workspace_for_move = workspace.clone();
-                        let multi_workspace_for_move = multi_workspace.clone();
-                        menu.entry(
-                            "Move to New Window",
-                            Some(Box::new(
-                                zed_actions::agents_sidebar::MoveWorkspaceToNewWindow,
-                            )),
-                            move |window, cx| {
-                                if let Some(mw) = multi_workspace_for_move.upgrade() {
-                                    mw.update(cx, |multi_workspace, cx| {
-                                        if let Some(index) = multi_workspace
-                                            .workspaces()
-                                            .iter()
-                                            .position(|w| *w == workspace_for_move)
-                                        {
-                                            multi_workspace
-                                                .move_workspace_to_new_window(index, window, cx);
-                                        }
-                                    });
-                                }
-                            },
-                        )
-                    } else {
-                        menu
-                    };
-
-                    let workspace_for_remove = workspace_for_remove.clone();
-                    let multi_workspace_for_remove = multi_workspace.clone();
-                    menu.separator()
-                        .entry("Remove Project", None, move |window, cx| {
-                            if let Some(mw) = multi_workspace_for_remove.upgrade() {
-                                let ws = workspace_for_remove.clone();
-                                mw.update(cx, |multi_workspace, cx| {
-                                    if let Some(index) =
-                                        multi_workspace.workspaces().iter().position(|w| *w == ws)
-                                    {
-                                        multi_workspace.remove_workspace(index, window, cx);
-                                    }
-                                });
-                            }
+                    let dismiss_this = this.clone();
+                    window
+                        .subscribe(&menu, cx, move |_, _: &DismissEvent, window, cx| {
+                            window.dismiss_native_popover();
+                            dismiss_this.update(cx, |sidebar, cx| {
+                                sidebar.project_header_menu_ix = None;
+                                cx.notify();
+                            })
+                            .ok();
                         })
-                });
+                        .detach();
 
-                let this = this.clone();
-                window
-                    .subscribe(&menu, cx, move |_, _: &gpui::DismissEvent, _window, cx| {
+                    window.show_native_popover(
+                        NativePopover::new(320.0, 420.0)
+                            .behavior(NativePopoverBehavior::Transient)
+                            .on_close({
+                                let this = this.clone();
+                                move |_, _window, cx| {
+                                    this.update(cx, |sidebar, cx| {
+                                        sidebar.project_header_menu_ix = None;
+                                        cx.notify();
+                                    })
+                                    .ok();
+                                }
+                            })
+                            .content_view(menu),
+                        NativePopoverAnchor::ContentElement(trigger_id.clone()),
+                    );
+                    cx.notify();
+                }))
+                .into_any_element();
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            PopoverMenu::new(format!("{id_prefix}project-header-menu-{ix}"))
+                .on_open(Rc::new({
+                    let this = this.clone();
+                    move |_window, cx| {
                         this.update(cx, |sidebar, cx| {
-                            sidebar.project_header_menu_ix = None;
+                            sidebar.project_header_menu_ix = Some(ix);
                             cx.notify();
                         })
                         .ok();
-                    })
-                    .detach();
+                    }
+                }))
+                .menu(move |window, cx| {
+                    let menu = self.build_project_header_context_menu(
+                        workspace_for_menu.clone(),
+                        workspace_for_remove.clone(),
+                        multi_workspace.clone(),
+                        window,
+                        cx,
+                    );
 
-                Some(menu)
-            })
-            .trigger(
-                IconButton::new(
-                    SharedString::from(format!("{id_prefix}-ellipsis-menu-{ix}")),
-                    IconName::Ellipsis,
+                    let this = this.clone();
+                    window
+                        .subscribe(&menu, cx, move |_, _: &DismissEvent, _window, cx| {
+                            this.update(cx, |sidebar, cx| {
+                                sidebar.project_header_menu_ix = None;
+                                cx.notify();
+                            })
+                            .ok();
+                        })
+                        .detach();
+
+                    Some(menu)
+                })
+                .trigger(
+                    IconButton::new(trigger_id, IconName::Ellipsis)
+                        .selected_style(ButtonStyle::Tinted(TintColor::Accent))
+                        .icon_size(IconSize::Small)
+                        .icon_color(Color::Muted),
                 )
-                .selected_style(ButtonStyle::Tinted(TintColor::Accent))
-                .icon_size(IconSize::Small)
-                .icon_color(Color::Muted),
-            )
-            .anchor(gpui::Corner::TopRight)
-            .offset(gpui::Point {
-                x: px(0.),
-                y: px(1.),
-            })
+                .anchor(gpui::Corner::TopRight)
+                .offset(gpui::Point {
+                    x: px(0.),
+                    y: px(1.),
+                })
+                .into_any_element()
+        }
     }
 
     fn render_sticky_header(
@@ -2598,7 +2663,7 @@ impl Sidebar {
             .child(self.filter_editor.clone())
     }
 
-    fn render_recent_projects_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_recent_projects_button(&self, cx: &mut Context<Self>) -> AnyElement {
         let multi_workspace = self.multi_workspace.upgrade();
 
         let workspace = multi_workspace
@@ -2622,26 +2687,12 @@ impl Sidebar {
             })
             .unwrap_or_default();
 
-        let popover_handle = self.recent_projects_popover_handle.clone();
-
-        PopoverMenu::new("sidebar-recent-projects-menu")
-            .with_handle(popover_handle)
-            .menu(move |window, cx| {
-                workspace.as_ref().map(|ws| {
-                    SidebarRecentProjects::popover(
-                        ws.clone(),
-                        sibling_workspace_ids.clone(),
-                        focus_handle.clone(),
-                        window,
-                        cx,
-                    )
-                })
-            })
-            .trigger_with_tooltip(
-                IconButton::new("open-project", IconName::OpenFolder)
-                    .icon_size(IconSize::Small)
-                    .selected_style(ButtonStyle::Tinted(TintColor::Accent)),
-                |_window, cx| {
+        #[cfg(target_os = "macos")]
+        {
+            return IconButton::new("open-project", IconName::OpenFolder)
+                .icon_size(IconSize::Small)
+                .selected_style(ButtonStyle::Tinted(TintColor::Accent))
+                .tooltip(|_window, cx| {
                     Tooltip::for_action(
                         "Add Project",
                         &OpenRecent {
@@ -2649,13 +2700,64 @@ impl Sidebar {
                         },
                         cx,
                     )
-                },
-            )
-            .offset(gpui::Point {
-                x: px(-2.0),
-                y: px(-2.0),
-            })
-            .anchor(gpui::Corner::BottomRight)
+                })
+                .on_click(move |_, window, cx| {
+                    if let Some(workspace) = workspace.as_ref() {
+                        let popover = SidebarRecentProjects::popover(
+                            workspace.clone(),
+                            sibling_workspace_ids.clone(),
+                            focus_handle.clone(),
+                            window,
+                            cx,
+                        );
+                        window.show_native_popover(
+                            NativePopover::new(360.0, 420.0)
+                                .behavior(NativePopoverBehavior::Transient)
+                                .content_view(popover),
+                            NativePopoverAnchor::ContentElement("open-project".into()),
+                        );
+                    }
+                })
+                .into_any_element();
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let popover_handle = self.recent_projects_popover_handle.clone();
+            PopoverMenu::new("sidebar-recent-projects-menu")
+                .with_handle(popover_handle)
+                .menu(move |window, cx| {
+                    workspace.as_ref().map(|ws| {
+                        SidebarRecentProjects::popover(
+                            ws.clone(),
+                            sibling_workspace_ids.clone(),
+                            focus_handle.clone(),
+                            window,
+                            cx,
+                        )
+                    })
+                })
+                .trigger_with_tooltip(
+                    IconButton::new("open-project", IconName::OpenFolder)
+                        .icon_size(IconSize::Small)
+                        .selected_style(ButtonStyle::Tinted(TintColor::Accent)),
+                    |_window, cx| {
+                        Tooltip::for_action(
+                            "Add Project",
+                            &OpenRecent {
+                                create_new_window: false,
+                            },
+                            cx,
+                        )
+                    },
+                )
+                .offset(gpui::Point {
+                    x: px(-2.0),
+                    y: px(-2.0),
+                })
+                .anchor(gpui::Corner::BottomRight)
+                .into_any_element()
+        }
     }
 
     fn render_view_more(

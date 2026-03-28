@@ -21,7 +21,7 @@ mod mode_view_registry;
 
 pub use mode_switcher::ModeSwitcher;
 pub use mode_view_registry::{
-    ModeDeactivateCallback, ModeSidebarController, ModeSidebarToggleFn, ModeSidebarVisibilityFn,
+    ModeDeactivateCallback, ModeSidebarHost, ModeSidebarToggleFn, ModeSidebarVisibilityFn,
     ModeViewFactory, ModeViewRegistry, RegisteredModeView,
 };
 

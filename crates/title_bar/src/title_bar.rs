@@ -6,11 +6,9 @@ mod plan_chip;
 mod title_bar_settings;
 mod update_version;
 
-#[cfg(target_os = "macos")]
-pub use native_toolbar::NativeToolbarController;
 pub use workspace::TitleBarItemView;
 
-use crate::application_menu::ApplicationMenu;
+use crate::application_menu::{ApplicationMenu, show_menus};
 use crate::plan_chip::PlanChip;
 pub use platform_title_bar::{
     self, DraggedWindowTab, MergeAllWindows, MoveTabToNewWindow, PlatformTitleBar,
@@ -22,7 +20,6 @@ use crate::application_menu::{
     ActivateDirection, ActivateMenuLeft, ActivateMenuRight, OpenApplicationMenu,
 };
 
-#[cfg(not(target_os = "macos"))]
 use auto_update::AutoUpdateStatus;
 use client::{Client, UserStore, zed_urls};
 use cloud_api_types::Plan;
@@ -34,7 +31,10 @@ use gpui::{
     WeakEntity, Window, actions, div, native_button, native_icon_button,
 };
 use onboarding_banner::OnboardingBanner;
-use project::{Project, git_store::GitStoreEvent, trusted_worktrees::TrustedWorktrees};
+use project::{
+    Project, git_store::GitStoreEvent, linked_worktree_short_name,
+    trusted_worktrees::TrustedWorktrees,
+};
 use remote::RemoteConnectionOptions;
 use settings::Settings;
 use settings::WorktreeId;
@@ -88,40 +88,22 @@ pub fn init(cx: &mut App) {
         let Some(window) = window else {
             return;
         };
-        #[cfg(target_os = "macos")]
-        {
-            let item =
-                cx.new(|cx| NativeToolbarController::new("native-toolbar", workspace, window, cx));
-            workspace.set_titlebar_item(item.into(), window, cx);
+        let item = cx.new(|cx| TitleBar::new("title-bar", workspace, window, cx));
+        workspace.set_titlebar_item(item.into(), window, cx);
 
-            workspace.register_action(|workspace, _: &SimulateUpdateAvailable, _window, cx| {
-                if let Some(controller) = workspace
-                    .titlebar_item()
-                    .and_then(|item| item.downcast::<NativeToolbarController>().ok())
-                {
-                    controller.update(cx, |controller, cx| {
-                        controller.toggle_update_simulation(cx);
-                    });
-                }
-            });
-        }
+        workspace.register_action(|workspace, _: &SimulateUpdateAvailable, _window, cx| {
+            if let Some(titlebar) = workspace
+                .titlebar_item()
+                .and_then(|item| item.downcast::<TitleBar>().ok())
+            {
+                titlebar.update(cx, |titlebar, cx| {
+                    titlebar.toggle_update_simulation(cx);
+                });
+            }
+        });
 
         #[cfg(not(target_os = "macos"))]
         {
-            let item = cx.new(|cx| TitleBar::new("title-bar", workspace, window, cx));
-            workspace.set_titlebar_item(item.into(), window, cx);
-
-            workspace.register_action(|workspace, _: &SimulateUpdateAvailable, _window, cx| {
-                if let Some(titlebar) = workspace
-                    .titlebar_item()
-                    .and_then(|item| item.downcast::<TitleBar>().ok())
-                {
-                    titlebar.update(cx, |titlebar, cx| {
-                        titlebar.toggle_update_simulation(cx);
-                    });
-                }
-            });
-
             workspace.register_action(|workspace, action: &OpenApplicationMenu, window, cx| {
                 if let Some(titlebar) = workspace
                     .titlebar_item()
@@ -191,21 +173,28 @@ pub struct TitleBar {
     update_version: Entity<UpdateVersion>,
     right_items: Vec<Box<dyn TitleBarItemViewHandle>>,
     active_pane: Option<Entity<Pane>>,
+    #[cfg(target_os = "macos")]
+    native_toolbar_state: native_toolbar::NativeToolbarState,
 }
 
-#[cfg(not(target_os = "macos"))]
 impl Render for TitleBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_multi_workspace(window, cx);
-        self.render_gpui_title_bar(window, cx).into_any_element()
+        #[cfg(target_os = "macos")]
+        {
+            self.render_macos_title_bar(window, cx).into_any_element()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.render_gpui_title_bar(window, cx).into_any_element()
+        }
     }
 }
 
-#[cfg(not(target_os = "macos"))]
 impl TitleBar {
     fn render_gpui_title_bar(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let title_bar_settings = *TitleBarSettings::get_global(cx);
@@ -301,7 +290,9 @@ impl TitleBar {
                     .child(center_view)
                     .into_any_element(),
             );
-        } else if title_bar_settings.show_onboarding_banner {
+        }
+        #[cfg(not(target_os = "macos"))]
+        if titlebar_center.is_none() && title_bar_settings.show_onboarding_banner {
             children.push(self.banner.clone().into_any_element())
         }
 
@@ -523,6 +514,8 @@ impl TitleBar {
             update_version,
             right_items: Vec::new(),
             active_pane: None,
+            #[cfg(target_os = "macos")]
+            native_toolbar_state: native_toolbar::NativeToolbarState::default(),
         };
 
         this
@@ -568,12 +561,29 @@ impl TitleBar {
         for item in &self.right_items {
             item.set_active_pane_item(active_pane_item.as_deref(), window, cx);
         }
+        #[cfg(target_os = "macos")]
+        self.refresh_status_data(window, cx);
     }
 
     fn render_right_items(&self) -> impl IntoElement {
         h_flex()
             .gap_1()
             .children(self.right_items.iter().map(|item| item.to_any()))
+    }
+
+    pub fn toggle_lsp_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
+        {
+            self.show_lsp_menu(window, cx);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn right_item_view<T: 'static>(&self) -> Option<Entity<T>> {
+        self.right_items
+            .iter()
+            .find(|item| item.item_type() == std::any::TypeId::of::<T>())
+            .and_then(|item| item.to_any().downcast::<T>().ok())
     }
 
     /// Used to update the title bar state in case the workspace has
@@ -614,6 +624,8 @@ impl TitleBar {
 
         self.multi_workspace = Some(multi_workspace.downgrade());
         self._subscriptions.push(subscription);
+        #[cfg(target_os = "macos")]
+        self.invalidate_native_toolbar(cx);
     }
 
     fn worktree_count(&self, cx: &App) -> usize {
@@ -861,7 +873,6 @@ impl TitleBar {
                 .into_any_element(),
         )
     }
-    #[cfg(not(target_os = "macos"))]
     fn render_mode_switcher(
         &self,
         _window: &mut Window,
@@ -1066,8 +1077,7 @@ impl TitleBar {
             .anchor(gpui::Corner::TopLeft)
     }
 
-    #[cfg(not(target_os = "macos"))]
-    fn render_editor_nav_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_editor_nav_buttons(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .gap_1()
             .child(
@@ -1251,7 +1261,6 @@ impl TitleBar {
         let _ = (window, cx);
     }
 
-    #[cfg(not(target_os = "macos"))]
     fn render_connection_status(
         &self,
         status: &client::Status,

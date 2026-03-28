@@ -1,11 +1,11 @@
 use anyhow::Result;
-#[cfg(target_os = "macos")]
-use gpui::native_sidebar;
 use gpui::{
     AnyView, App, Context, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
-    ManagedView, MouseButton, Pixels, Render, Subscription, Task, Tiling, Window,
-    WindowBackgroundAppearance, WindowId, actions, deferred, px,
+    ManagedView, MouseButton, Pixels, Render, Subscription, Task, Tiling,
+    Window, WindowBackgroundAppearance, WindowId, actions, deferred, px,
 };
+#[cfg(target_os = "macos")]
+use gpui::native_sidebar;
 use project::Project;
 use std::future::Future;
 use std::path::PathBuf;
@@ -20,7 +20,7 @@ pub const SIDEBAR_RESIZE_HANDLE_SIZE: Pixels = px(6.0);
 
 use crate::{
     CloseIntent, CloseWindow, DockPosition, Event as WorkspaceEvent, Item, ModalView, Panel,
-    UnifiedSidebar, Workspace, WorkspaceId, client_side_decorations,
+    Workspace, WorkspaceId, WorkspaceSidebarHost, client_side_decorations,
 };
 
 actions!(
@@ -130,7 +130,7 @@ pub struct MultiWorkspace {
     active_workspace_index: usize,
     sidebar: Option<Box<dyn SidebarHandle>>,
     #[cfg(target_os = "macos")]
-    unified_sidebar: Entity<UnifiedSidebar>,
+    workspace_sidebar_host: Entity<WorkspaceSidebarHost>,
     sidebar_open: bool,
     sidebar_has_notifications: bool,
     pending_removal_tasks: Vec<Task<()>>,
@@ -166,9 +166,9 @@ impl MultiWorkspace {
         let quit_subscription = cx.on_app_quit(Self::app_will_quit);
         Self::subscribe_to_workspace(&workspace, cx);
         #[cfg(target_os = "macos")]
-        let unified_sidebar = {
+        let workspace_sidebar_host = {
             let left_dock = workspace.read(cx).left_dock().clone();
-            cx.new(|_cx| UnifiedSidebar::new(left_dock))
+            cx.new(|_cx| WorkspaceSidebarHost::new(left_dock))
         };
         Self {
             window_id: window.window_handle().window_id(),
@@ -176,7 +176,7 @@ impl MultiWorkspace {
             active_workspace_index: 0,
             sidebar: None,
             #[cfg(target_os = "macos")]
-            unified_sidebar,
+            workspace_sidebar_host,
             sidebar_open: false,
             sidebar_has_notifications: false,
             pending_removal_tasks: Vec::new(),
@@ -211,8 +211,8 @@ impl MultiWorkspace {
     }
 
     #[cfg(target_os = "macos")]
-    pub fn unified_sidebar(&self) -> &Entity<UnifiedSidebar> {
-        &self.unified_sidebar
+    pub fn workspace_sidebar_host(&self) -> &Entity<WorkspaceSidebarHost> {
+        &self.workspace_sidebar_host
     }
 
     pub fn register_sidebar<T: Sidebar>(&mut self, sidebar: Entity<T>, _cx: &mut Context<Self>) {
@@ -374,19 +374,19 @@ impl MultiWorkspace {
     /// mode, and hosted sidebar view. Width is NOT synced because the NSSplitView manages
     /// its own divider position independently.
     #[cfg(target_os = "macos")]
-    fn sync_unified_sidebar(&self, cx: &mut App) {
+    fn sync_workspace_sidebar_host(&self, cx: &mut App) {
         let active_ws = self.workspace().clone();
         let (left_dock, mode, sidebar_view) = {
             let workspace = active_ws.read(cx);
             let mode = workspace.active_mode_id();
             let sidebar_view = workspace
-                .unified_sidebar
+                .workspace_sidebar_host
                 .read(cx)
                 .mode_sidebar_view(mode)
                 .cloned();
             (workspace.left_dock().clone(), mode, sidebar_view)
         };
-        self.unified_sidebar.update(cx, |sidebar, cx| {
+        self.workspace_sidebar_host.update(cx, |sidebar, cx| {
             sidebar.set_left_dock(left_dock, cx);
             sidebar.set_mode(mode, cx);
             if let Some(view) = sidebar_view {
@@ -473,7 +473,7 @@ impl MultiWorkspace {
             workspace.invalidate_window_caches(window, cx);
             cx.notify();
         });
-        self.sync_unified_sidebar(cx);
+        self.sync_workspace_sidebar_host(cx);
         self.serialize(cx);
         self.focus_active_workspace(window, cx);
         if changed {
@@ -838,7 +838,7 @@ impl MultiWorkspace {
 impl Render for MultiWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(target_os = "macos")]
-        self.sync_unified_sidebar(cx);
+        self.sync_workspace_sidebar_host(cx);
 
         let multi_workspace_enabled = self.multi_workspace_enabled(cx);
         let sidebar = if multi_workspace_enabled && self.sidebar_open() {
@@ -962,9 +962,10 @@ impl Render for MultiWorkspace {
 
                     #[cfg(target_os = "macos")]
                     let workspace_content = {
-                        let ws = self.workspace().read(cx);
-                        let sidebar_collapsed = ws.unified_sidebar_collapsed(window, cx);
-                        let sidebar_width = self.unified_sidebar.read(cx).width();
+                        let workspace = self.workspace().read(cx);
+                        let sidebar_collapsed =
+                            workspace.workspace_sidebar_host_collapsed(window, cx);
+                        let sidebar_width = self.workspace_sidebar_host.read(cx).width();
                         let sidebar_titlebar_fill = match cx.theme().window_background_appearance()
                         {
                             WindowBackgroundAppearance::Opaque => {
@@ -972,13 +973,14 @@ impl Render for MultiWorkspace {
                             }
                             _ => None,
                         };
+
                         div()
                             .size_full()
                             .flex()
                             .flex_row()
                             .child(
-                                native_sidebar("workspace-unified-sidebar", &[""; 0])
-                                    .sidebar_view(self.unified_sidebar.clone())
+                                native_sidebar("workspace-sidebar-host-shell", &[""; 0])
+                                    .sidebar_view(self.workspace_sidebar_host.clone())
                                     .sidebar_width(sidebar_width)
                                     .min_sidebar_width(160.0)
                                     .max_sidebar_width(480.0)

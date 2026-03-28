@@ -19,7 +19,7 @@ pub type ModeSidebarToggleFn = fn(&AnyView, &mut App);
 
 /// Hosted sidebar content and behavior for a mode view.
 #[derive(Clone)]
-pub struct ModeSidebarController {
+pub struct ModeSidebarHost {
     /// View shown in the unified native sidebar when this mode is active.
     pub sidebar_view: AnyView,
     /// Computes whether the hosted sidebar should be visible.
@@ -40,8 +40,8 @@ pub struct RegisteredModeView {
     pub focus_handle: FocusHandle,
     /// Optional view to render in the title bar center when this mode is active
     pub titlebar_center_view: Option<AnyView>,
-    /// Optional hosted sidebar controller for the active mode view.
-    pub sidebar: Option<ModeSidebarController>,
+    /// Optional hosted sidebar host for the active mode view.
+    pub sidebar_host: Option<ModeSidebarHost>,
     /// Optional callback invoked when this mode is deactivated
     pub on_deactivate: Option<ModeDeactivateCallback>,
 }

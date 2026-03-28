@@ -40,7 +40,6 @@ use gpui::{
     Task, TitlebarOptions, UpdateGlobal, WeakEntity, Window, WindowHandle, WindowKind,
     WindowOptions, actions, image_cache, point, px, retain_all,
 };
-#[cfg(not(target_os = "macos"))]
 use image_viewer::ImageInfo;
 use language::Capability;
 use language_onboarding::BasedPyrightBanner;
@@ -433,27 +432,13 @@ pub fn initialize_workspace(
             crashes::set_gpu_info(specs);
         }
 
-        #[cfg(target_os = "macos")]
+        if let Some(title_bar) = workspace
+            .titlebar_item()
+            .and_then(|item| item.downcast::<title_bar::TitleBar>().ok())
         {
-            if let Some(controller) = workspace
-                .titlebar_item()
-                .and_then(|item| item.downcast::<title_bar::NativeToolbarController>().ok())
-            {
-                controller.update(cx, |controller, cx| {
-                    controller.set_active_pane(&workspace.active_pane().clone(), window, cx);
-                });
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            if let Some(title_bar) = workspace
-                .titlebar_item()
-                .and_then(|item| item.downcast::<title_bar::TitleBar>().ok())
-            {
-                title_bar.update(cx, |title_bar, cx| {
-                    title_bar.set_active_pane(&workspace.active_pane().clone(), window, cx);
-                });
-            }
+            title_bar.update(cx, |title_bar, cx| {
+                title_bar.set_active_pane(&workspace.active_pane().clone(), window, cx);
+            });
         }
 
         workspace.register_action(
@@ -499,22 +484,20 @@ pub fn initialize_workspace(
         let lsp_button =
             cx.new(|cx| LspButton::new(workspace, lsp_button_menu_handle.clone(), window, cx));
 
-        #[cfg(target_os = "macos")]
-        workspace.register_action(move |workspace, _: &lsp_button::ToggleMenu, window, cx| {
-            if let Some(controller) = workspace
-                .titlebar_item()
-                .and_then(|item| item.downcast::<title_bar::NativeToolbarController>().ok())
-            {
-                controller.update(cx, |controller, cx| {
-                    controller.show_lsp_menu(window, cx);
-                });
-            }
-        });
-
-        #[cfg(not(target_os = "macos"))]
         workspace.register_action({
             let lsp_button_menu_handle = lsp_button_menu_handle.clone();
-            move |_, _: &lsp_button::ToggleMenu, window, cx| {
+            move |workspace, _: &lsp_button::ToggleMenu, window, cx| {
+                #[cfg(target_os = "macos")]
+                if let Some(title_bar) = workspace
+                    .titlebar_item()
+                    .and_then(|item| item.downcast::<title_bar::TitleBar>().ok())
+                {
+                    title_bar.update(cx, |title_bar, cx| {
+                        title_bar.toggle_lsp_menu(window, cx);
+                    });
+                    return;
+                }
+
                 lsp_button_menu_handle.toggle(window, cx);
             }
         });
@@ -536,50 +519,32 @@ pub fn initialize_workspace(
             },
         );
 
-        // On macOS, most status items are rendered as native toolbar items.
-        // On other platforms, they are rendered as GPUI views in the title bar overlay.
-        #[cfg(not(target_os = "macos"))]
-        {
-            let activity_indicator = activity_indicator::ActivityIndicator::new(
-                workspace,
-                workspace.project().read(cx).languages().clone(),
-                window,
-                cx,
-            );
-            let active_buffer_encoding =
-                cx.new(|_| encoding_selector::ActiveBufferEncoding::new(workspace));
-            let active_toolchain_language =
-                cx.new(|cx| toolchain_selector::ActiveToolchain::new(workspace, window, cx));
-            let image_info = cx.new(|_cx| ImageInfo::new(workspace));
-            let line_ending_indicator =
-                cx.new(|_| line_ending_selector::LineEndingIndicator::default());
+        let activity_indicator = activity_indicator::ActivityIndicator::new(
+            workspace,
+            workspace.project().read(cx).languages().clone(),
+            window,
+            cx,
+        );
+        let active_buffer_encoding =
+            cx.new(|_| encoding_selector::ActiveBufferEncoding::new(workspace));
+        let active_toolchain_language =
+            cx.new(|cx| toolchain_selector::ActiveToolchain::new(workspace, window, cx));
+        let image_info = cx.new(|_cx| ImageInfo::new(workspace));
+        let line_ending_indicator =
+            cx.new(|_| line_ending_selector::LineEndingIndicator::default());
 
-            if let Some(title_bar) = workspace
-                .titlebar_item()
-                .and_then(|item| item.downcast::<title_bar::TitleBar>().ok())
-            {
-                title_bar.update(cx, |title_bar, cx| {
-                    title_bar.add_right_item(image_info, window, cx);
-                    title_bar.add_right_item(line_ending_indicator, window, cx);
-                    title_bar.add_right_item(active_toolchain_language, window, cx);
-                    title_bar.add_right_item(active_buffer_encoding, window, cx);
-                    title_bar.add_right_item(activity_indicator, window, cx);
-                    title_bar.add_right_item(lsp_button, window, cx);
-                });
-            }
-        }
-
-        // On macOS, add LSP to the native toolbar controller for active pane tracking.
-        #[cfg(target_os = "macos")]
+        if let Some(title_bar) = workspace
+            .titlebar_item()
+            .and_then(|item| item.downcast::<title_bar::TitleBar>().ok())
         {
-            if let Some(controller) = workspace
-                .titlebar_item()
-                .and_then(|item| item.downcast::<title_bar::NativeToolbarController>().ok())
-            {
-                controller.update(cx, |controller, cx| {
-                    controller.add_right_item(lsp_button, window, cx);
-                });
-            }
+            title_bar.update(cx, |title_bar, cx| {
+                title_bar.add_right_item(image_info, window, cx);
+                title_bar.add_right_item(line_ending_indicator, window, cx);
+                title_bar.add_right_item(active_toolchain_language, window, cx);
+                title_bar.add_right_item(active_buffer_encoding, window, cx);
+                title_bar.add_right_item(activity_indicator, window, cx);
+                title_bar.add_right_item(lsp_button, window, cx);
+            });
         }
 
         let panels_task = initialize_panels(prompt_builder.clone(), window, cx);

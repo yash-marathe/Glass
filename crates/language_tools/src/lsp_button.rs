@@ -844,6 +844,20 @@ impl LspButton {
         self.lsp_menu.clone()
     }
 
+    pub fn ensure_toolbar_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<ContextMenu>> {
+        self.regenerate_items(cx);
+        let state = self.server_state.clone();
+        let menu = ContextMenu::build(window, cx, |menu, _, cx| {
+            state.update(cx, |state, cx| state.fill_menu(menu, cx))
+        });
+        self.lsp_menu = Some(menu.clone());
+        Some(menu)
+    }
+
     fn on_lsp_store_event(
         &mut self,
         e: &LspStoreEvent,

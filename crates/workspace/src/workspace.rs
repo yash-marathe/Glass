@@ -55,9 +55,9 @@ use gpui::{
     CursorStyle, Decorations, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle,
     Focusable, Global, HitboxBehavior, Hsla, KeyContext, Keystroke, ManagedView, MouseButton,
     PathPromptOptions, Point, PromptLevel, Render, ResizeEdge, Size, Stateful, Subscription,
-    SystemWindowTabController, Task, Tiling, WeakEntity, WindowBackgroundAppearance, WindowBounds,
-    WindowHandle, WindowId, WindowOptions, actions, canvas, point, relative, size,
-    transparent_black,
+    SystemWindowTabController, Task, Tiling, WeakEntity, WindowBackgroundAppearance,
+    WindowBounds, WindowHandle, WindowId, WindowOptions, actions, canvas, point, px, relative,
+    size, transparent_black,
 };
 pub use history_manager::*;
 pub use item::{
@@ -158,7 +158,7 @@ use crate::{
     security_modal::SecurityModal,
 };
 
-/// A unified sidebar that persists across mode switches (browser, editor, terminal).
+/// A workspace sidebar host that persists across mode switches (browser, editor, terminal).
 /// Instead of each mode creating its own native_sidebar, this single entity wraps
 /// the appropriate sidebar content for the current mode, avoiding teardown/rebuild
 /// of the NSSplitViewController on mode switches.
@@ -166,7 +166,7 @@ use crate::{
 const DEFAULT_SIDEBAR_WIDTH: f64 = 240.0;
 
 #[cfg(target_os = "macos")]
-pub struct UnifiedSidebar {
+pub struct WorkspaceSidebarHost {
     active_mode: ModeId,
     left_dock: Entity<Dock>,
     mode_sidebar_views: HashMap<ModeId, AnyView>,
@@ -174,7 +174,7 @@ pub struct UnifiedSidebar {
 }
 
 #[cfg(target_os = "macos")]
-impl UnifiedSidebar {
+impl WorkspaceSidebarHost {
     pub fn new(left_dock: Entity<Dock>) -> Self {
         Self {
             active_mode: ModeId::BROWSER,
@@ -237,7 +237,7 @@ impl UnifiedSidebar {
 }
 
 #[cfg(target_os = "macos")]
-impl Render for UnifiedSidebar {
+impl Render for WorkspaceSidebarHost {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(view) = self.active_mode_sidebar_view() {
             return div().size_full().child(view.clone()).into_any_element();
@@ -1333,7 +1333,7 @@ struct DispatchingKeystrokes {
 struct PerWorkspaceModeView {
     view: AnyView,
     focus_handle: FocusHandle,
-    sidebar: Option<workspace_modes::ModeSidebarController>,
+    sidebar_host: Option<workspace_modes::ModeSidebarHost>,
     on_deactivate: Option<ModeDeactivateCallback>,
 }
 
@@ -1352,7 +1352,7 @@ pub struct Workspace {
     center: PaneGroup,
     left_dock: Entity<Dock>,
     #[cfg(target_os = "macos")]
-    pub(crate) unified_sidebar: Entity<UnifiedSidebar>,
+    pub(crate) workspace_sidebar_host: Entity<WorkspaceSidebarHost>,
     bottom_dock: Entity<Dock>,
     right_dock: Entity<Dock>,
     panes: Vec<Entity<Pane>>,
@@ -1673,9 +1673,9 @@ impl Workspace {
             dock.in_native_sidebar = true;
         });
         #[cfg(target_os = "macos")]
-        let unified_sidebar = {
+        let workspace_sidebar_host = {
             let left_dock_clone = left_dock.clone();
-            cx.new(|_cx| UnifiedSidebar::new(left_dock_clone))
+            cx.new(|_cx| WorkspaceSidebarHost::new(left_dock_clone))
         };
         let bottom_dock = Dock::new(DockPosition::Bottom, modal_layer.clone(), None, window, cx);
         let right_dock = Dock::new(DockPosition::Right, modal_layer.clone(), None, window, cx);
@@ -1701,7 +1701,7 @@ impl Workspace {
                     .visible_content_size(window, cx)
                     .map(|s| f64::from(s));
                 if let Some(width) = width {
-                    this.unified_sidebar.update(cx, |sidebar, cx| {
+                    this.workspace_sidebar_host.update(cx, |sidebar, cx| {
                         sidebar.set_width(width, cx);
                     });
                 }
@@ -1768,7 +1768,7 @@ impl Workspace {
             suppressed_notifications: HashSet::default(),
             left_dock,
             #[cfg(target_os = "macos")]
-            unified_sidebar,
+            workspace_sidebar_host,
             bottom_dock,
             right_dock,
             _panels_task: None,
@@ -5081,7 +5081,7 @@ impl Workspace {
         PerWorkspaceModeView {
             view: registered.view,
             focus_handle: registered.focus_handle,
-            sidebar: registered.sidebar,
+            sidebar_host: registered.sidebar_host,
             on_deactivate: registered.on_deactivate,
         }
     }
@@ -5091,7 +5091,7 @@ impl Workspace {
         self.mode_view_entry(self.active_mode)
             .and_then(|mode_view| {
                 mode_view
-                    .sidebar
+                    .sidebar_host
                     .as_ref()
                     .map(|sidebar| (sidebar.is_visible)(&mode_view.view, cx))
             })
@@ -5099,9 +5099,9 @@ impl Workspace {
     }
 
     #[cfg(target_os = "macos")]
-    pub(crate) fn unified_sidebar_collapsed(&self, window: &Window, cx: &App) -> bool {
+    pub(crate) fn workspace_sidebar_host_collapsed(&self, window: &Window, cx: &App) -> bool {
         if self
-            .unified_sidebar
+            .workspace_sidebar_host
             .read(cx)
             .has_mode_sidebar_view(self.active_mode)
         {
@@ -5122,7 +5122,7 @@ impl Workspace {
         let Some(mode_view) = self.mode_view_entry(self.active_mode) else {
             return false;
         };
-        let Some(sidebar) = mode_view.sidebar.as_ref() else {
+        let Some(sidebar) = mode_view.sidebar_host.as_ref() else {
             return false;
         };
 
@@ -5149,8 +5149,8 @@ impl Workspace {
         let mode_view = Self::registered_mode_view_to_workspace_mode_view(registered);
 
         #[cfg(target_os = "macos")]
-        if let Some(mode_sidebar) = mode_view.sidebar.as_ref() {
-            self.unified_sidebar.update(cx, |sidebar, cx| {
+        if let Some(mode_sidebar) = mode_view.sidebar_host.as_ref() {
+            self.workspace_sidebar_host.update(cx, |sidebar, cx| {
                 sidebar.set_mode_sidebar_view(mode_id, mode_sidebar.sidebar_view.clone(), cx);
             });
         }
@@ -5179,8 +5179,8 @@ impl Workspace {
                 let registered = factory(cx);
 
                 #[cfg(target_os = "macos")]
-                if let Some(mode_sidebar) = registered.sidebar.as_ref() {
-                    self.unified_sidebar.update(cx, |sidebar, cx| {
+                if let Some(mode_sidebar) = registered.sidebar_host.as_ref() {
+                    self.workspace_sidebar_host.update(cx, |sidebar, cx| {
                         sidebar.set_mode_sidebar_view(
                             mode_id,
                             mode_sidebar.sidebar_view.clone(),
@@ -5189,13 +5189,13 @@ impl Workspace {
                     });
                 }
 
-                entry.insert(PerWorkspaceModeView {
-                    view: registered.view,
-                    focus_handle: registered.focus_handle,
-                    sidebar: registered.sidebar,
-                    on_deactivate: registered.on_deactivate,
-                });
-            }
+                    entry.insert(PerWorkspaceModeView {
+                        view: registered.view,
+                        focus_handle: registered.focus_handle,
+                        sidebar_host: registered.sidebar_host,
+                        on_deactivate: registered.on_deactivate,
+                    });
+                }
         }
         self.mode_view_entry(mode_id)
     }
@@ -5299,7 +5299,7 @@ impl Workspace {
             }
 
             #[cfg(target_os = "macos")]
-            self.unified_sidebar.update(cx, |sidebar, cx| {
+            self.workspace_sidebar_host.update(cx, |sidebar, cx| {
                 sidebar.set_mode(mode_id, cx);
             });
 
@@ -6811,22 +6811,17 @@ impl Workspace {
         )
     }
 
-    /// Wraps the entire mode-specific content with the unified native sidebar on macOS.
+    /// Wraps the entire mode-specific content with the native workspace sidebar shell.
     #[cfg(target_os = "macos")]
-    fn render_with_unified_sidebar(
+    fn render_with_workspace_sidebar_host(
         &self,
         mode_content: AnyElement,
-        unified_sidebar: Entity<UnifiedSidebar>,
+        workspace_sidebar_host: Entity<WorkspaceSidebarHost>,
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
-        let sidebar_width = unified_sidebar.read(cx).width();
-
-        let sidebar_collapsed = self.unified_sidebar_collapsed(window, cx);
-
-        // For opaque (non-glass) themes, fill the sidebar's native titlebar area
-        // with the panel background color so it matches the rest of the sidebar.
-        // Glass/vibrancy themes leave this as None so native transparency shows through.
+        let sidebar_width = workspace_sidebar_host.read(cx).width();
+        let sidebar_collapsed = self.workspace_sidebar_host_collapsed(window, cx);
         let sidebar_titlebar_fill = match cx.theme().window_background_appearance() {
             WindowBackgroundAppearance::Opaque => Some(cx.theme().colors().panel_background),
             _ => None,
@@ -6837,8 +6832,8 @@ impl Workspace {
             .flex()
             .flex_row()
             .child(
-                native_sidebar("workspace-unified-sidebar", &[""; 0])
-                    .sidebar_view(unified_sidebar)
+                native_sidebar("workspace-sidebar-host", &[""; 0])
+                    .sidebar_view(workspace_sidebar_host)
                     .sidebar_width(sidebar_width)
                     .min_sidebar_width(160.0)
                     .max_sidebar_width(480.0)
@@ -6956,7 +6951,7 @@ impl Workspace {
         });
 
         #[cfg(target_os = "macos")]
-        self.unified_sidebar.update(cx, |sidebar, cx| {
+        self.workspace_sidebar_host.update(cx, |sidebar, cx| {
             sidebar.set_width(f64::from(size), cx);
         });
 
@@ -7793,11 +7788,10 @@ impl Render for Workspace {
                                         editor_layout.into_any_element()
                                     };
 
-                                    // On macOS, the native_sidebar is rendered by
-                                    // MultiWorkspace so that the NSSplitViewController's
-                                    // element state persists across workspace switches.
-                                    // Workspace only wraps with native_sidebar when NOT
-                                    // inside a MultiWorkspace (standalone window).
+                                    // In multi-workspace windows, the native sidebar shell is
+                                    // installed at the window boundary. Standalone workspaces
+                                    // still wrap themselves with the same GPUI native sidebar
+                                    // primitive so both paths share the same hosted-content model.
                                     #[cfg(target_os = "macos")]
                                     let mode_content = if window
                                         .root::<MultiWorkspace>()
@@ -7806,9 +7800,9 @@ impl Render for Workspace {
                                     {
                                         mode_content
                                     } else {
-                                        self.render_with_unified_sidebar(
+                                        self.render_with_workspace_sidebar_host(
                                             mode_content,
-                                            self.unified_sidebar.clone(),
+                                            self.workspace_sidebar_host.clone(),
                                             window,
                                             cx,
                                         )
@@ -9387,7 +9381,7 @@ mod tests {
     use settings::SettingsStore;
     use util::path;
     use util::rel_path::rel_path;
-    use workspace_modes::{ModeSidebarController, RegisteredModeView};
+    use workspace_modes::{ModeSidebarHost, RegisteredModeView};
 
     #[cfg(target_os = "macos")]
     struct TestBrowserChromeView {
@@ -13037,7 +13031,7 @@ mod tests {
                             view: browser_view.clone().into(),
                             focus_handle,
                             titlebar_center_view: None,
-                            sidebar: Some(ModeSidebarController {
+                            sidebar_host: Some(ModeSidebarHost {
                                 sidebar_view: browser_view.into(),
                                 is_visible: test_browser_sidebar_visible,
                                 toggle: test_toggle_browser_sidebar,
@@ -13091,7 +13085,7 @@ mod tests {
                         view: browser_view.clone().into(),
                         focus_handle,
                         titlebar_center_view: None,
-                        sidebar: Some(ModeSidebarController {
+                        sidebar_host: Some(ModeSidebarHost {
                             sidebar_view: browser_view.into(),
                             is_visible: test_browser_sidebar_visible,
                             toggle: test_toggle_browser_sidebar,
