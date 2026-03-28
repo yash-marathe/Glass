@@ -264,32 +264,34 @@ impl Render for WorkspaceSidebarHost {
         if let Some(view) = self.active_mode_sidebar_view() {
             return div().size_full().child(view.clone()).into_any_element();
         }
-        if self.workspace_sidebar_visible
-            && let Some(view) = self.workspace_sidebar_view.as_ref()
-        {
-            let button_bar = self.left_dock.read(cx).native_sidebar_button_bar();
-            return div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .overflow_hidden()
-                .when_some(button_bar, |this, dock_button_bar| {
-                    this.child(dock_button_bar)
-                })
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .size_full()
-                        .overflow_hidden()
-                        .child(view.clone()),
-                )
-                .into_any_element();
-        }
+
+        let body = if self.workspace_sidebar_visible {
+            self.workspace_sidebar_view
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| self.left_dock.clone().into())
+        } else {
+            self.left_dock.clone().into()
+        };
+
+        let button_bar = self.left_dock.read(cx).native_sidebar_button_bar();
         div()
             .size_full()
-            .child(self.left_dock.clone())
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .when_some(button_bar, |this, dock_button_bar| {
+                this.child(dock_button_bar)
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .size_full()
+                    .overflow_hidden()
+                    .child(body),
+            )
             .into_any_element()
     }
 }

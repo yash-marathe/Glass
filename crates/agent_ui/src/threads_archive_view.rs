@@ -795,35 +795,37 @@ impl ThreadsArchiveView {
 
     fn render_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let has_query = !self.filter_editor.read(cx).text(cx).is_empty();
-        let traffic_lights = cfg!(target_os = "macos") && !window.is_fullscreen();
+        let traffic_lights = false;
         let header_height = platform_title_bar_height(window);
         let show_focus_keybinding =
             self.selection.is_some() && !self.filter_editor.focus_handle(cx).is_focused(window);
 
         h_flex()
             .h(header_height)
+            .w_full()
             .mt_px()
             .pb_px()
+            .items_center()
             .when(traffic_lights, |this| {
                 this.pl(px(ui::utils::TRAFFIC_LIGHT_PADDING))
             })
             .pr_1p5()
             .gap_1()
-            .justify_between()
             .border_b_1()
             .border_color(cx.theme().colors().border)
             .child(
                 h_flex()
                     .ml_1()
                     .min_w_0()
-                    .w_full()
+                    .flex_1()
                     .gap_1()
+                    .items_center()
                     .child(
                         Icon::new(IconName::MagnifyingGlass)
                             .size(IconSize::Small)
                             .color(Color::Muted),
                     )
-                    .child(self.filter_editor.clone()),
+                    .child(div().min_w_0().flex_1().child(self.filter_editor.clone())),
             )
             .when(show_focus_keybinding, |this| {
                 this.child(KeyBinding::for_action(&FocusSidebarFilter, cx))

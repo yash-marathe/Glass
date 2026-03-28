@@ -12,8 +12,8 @@ use chrono::Utc;
 use editor::Editor;
 use gpui::{
     Action as _, AnyElement, App, Context, DismissEvent, Entity, FocusHandle, Focusable,
-    ListState, NativePopover, NativePopoverAnchor, NativePopoverBehavior, Pixels, Render,
-    SharedString, WeakEntity, Window, WindowHandle, list, prelude::*, px,
+    ListState, Pixels, Render, SharedString, WeakEntity, Window, WindowHandle, list, prelude::*,
+    px,
 };
 use menu::{
     Cancel, Confirm, SelectChild, SelectFirst, SelectLast, SelectNext, SelectParent, SelectPrevious,
@@ -25,21 +25,19 @@ use ui::utils::platform_title_bar_height;
 use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::path::Path;
-#[cfg(not(target_os = "macos"))]
 use std::rc::Rc;
 use std::sync::Arc;
 use theme::ActiveTheme;
 use ui::{
     AgentThreadStatus, CommonAnimationExt, ContextMenu, Divider, HighlightedLabel, KeyBinding,
-    PopoverMenuHandle, Tab, ThreadItem, TintColor, Tooltip, WithScrollbar, prelude::*,
+    PopoverMenu, PopoverMenuHandle, Tab, ThreadItem, TintColor, Tooltip, WithScrollbar,
+    prelude::*,
 };
-#[cfg(not(target_os = "macos"))]
-use ui::PopoverMenu;
 use util::ResultExt as _;
 use util::path_list::PathList;
 use workspace::{
-    AddFolderToProject, FocusWorkspaceSidebar, MultiWorkspace, MultiWorkspaceEvent, Open,
-    Sidebar as WorkspaceSidebar, ToggleWorkspaceSidebar, Workspace, WorkspaceId,
+    AddFolderToProject, MultiWorkspace, MultiWorkspaceEvent, Open, Sidebar as WorkspaceSidebar,
+    Workspace, WorkspaceId,
 };
 
 use zed_actions::OpenRecent;
@@ -1310,9 +1308,12 @@ impl Sidebar {
                 let path_list_for_new_thread = path_list.clone();
 
                 h_flex()
-                    .when(self.project_header_menu_ix != Some(ix), |this| {
+                    .when(
+                        cfg!(not(target_os = "macos")) && self.project_header_menu_ix != Some(ix),
+                        |this| {
                         this.visible_on_hover(group_name)
-                    })
+                    },
+                    )
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
                         cx.stop_propagation();
                     })
@@ -1406,7 +1407,6 @@ impl Sidebar {
     }
 
     fn build_project_header_context_menu(
-        &self,
         workspace: Entity<Workspace>,
         workspace_for_remove: Entity<Workspace>,
         multi_workspace: WeakEntity<MultiWorkspace>,
@@ -1546,104 +1546,51 @@ impl Sidebar {
         let multi_workspace = self.multi_workspace.clone();
         let this = cx.weak_entity();
         let trigger_id = SharedString::from(format!("{id_prefix}-ellipsis-menu-{ix}"));
+        PopoverMenu::new(format!("{id_prefix}project-header-menu-{ix}"))
+            .on_open(Rc::new({
+                let this = this.clone();
+                move |_window, cx| {
+                    this.update(cx, |sidebar, cx| {
+                        sidebar.project_header_menu_ix = Some(ix);
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            }))
+            .menu(move |window, cx| {
+                let menu = Self::build_project_header_context_menu(
+                    workspace_for_menu.clone(),
+                    workspace_for_remove.clone(),
+                    multi_workspace.clone(),
+                    window,
+                    cx,
+                );
 
-        #[cfg(target_os = "macos")]
-        {
-            return IconButton::new(trigger_id.clone(), IconName::Ellipsis)
-                .selected_style(ButtonStyle::Tinted(TintColor::Accent))
-                .icon_size(IconSize::Small)
-                .icon_color(Color::Muted)
-                .on_click(cx.listener(move |sidebar, _, window, cx| {
-                    sidebar.project_header_menu_ix = Some(ix);
-                    let menu = sidebar.build_project_header_context_menu(
-                        workspace_for_menu.clone(),
-                        workspace_for_remove.clone(),
-                        multi_workspace.clone(),
-                        window,
-                        cx,
-                    );
-
-                    let dismiss_this = this.clone();
-                    window
-                        .subscribe(&menu, cx, move |_, _: &DismissEvent, window, cx| {
-                            window.dismiss_native_popover();
-                            dismiss_this.update(cx, |sidebar, cx| {
-                                sidebar.project_header_menu_ix = None;
-                                cx.notify();
-                            })
-                            .ok();
-                        })
-                        .detach();
-
-                    window.show_native_popover(
-                        NativePopover::new(320.0, 420.0)
-                            .behavior(NativePopoverBehavior::Transient)
-                            .on_close({
-                                let this = this.clone();
-                                move |_, _window, cx| {
-                                    this.update(cx, |sidebar, cx| {
-                                        sidebar.project_header_menu_ix = None;
-                                        cx.notify();
-                                    })
-                                    .ok();
-                                }
-                            })
-                            .content_view(menu),
-                        NativePopoverAnchor::ContentElement(trigger_id.clone()),
-                    );
-                    cx.notify();
-                }))
-                .into_any_element();
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            PopoverMenu::new(format!("{id_prefix}project-header-menu-{ix}"))
-                .on_open(Rc::new({
-                    let this = this.clone();
-                    move |_window, cx| {
+                let this = this.clone();
+                window
+                    .subscribe(&menu, cx, move |_, _: &DismissEvent, _window, cx| {
                         this.update(cx, |sidebar, cx| {
-                            sidebar.project_header_menu_ix = Some(ix);
+                            sidebar.project_header_menu_ix = None;
                             cx.notify();
                         })
                         .ok();
-                    }
-                }))
-                .menu(move |window, cx| {
-                    let menu = self.build_project_header_context_menu(
-                        workspace_for_menu.clone(),
-                        workspace_for_remove.clone(),
-                        multi_workspace.clone(),
-                        window,
-                        cx,
-                    );
+                    })
+                    .detach();
 
-                    let this = this.clone();
-                    window
-                        .subscribe(&menu, cx, move |_, _: &DismissEvent, _window, cx| {
-                            this.update(cx, |sidebar, cx| {
-                                sidebar.project_header_menu_ix = None;
-                                cx.notify();
-                            })
-                            .ok();
-                        })
-                        .detach();
-
-                    Some(menu)
-                })
-                .trigger(
-                    IconButton::new(trigger_id, IconName::Ellipsis)
-                        .selected_style(ButtonStyle::Tinted(TintColor::Accent))
-                        .icon_size(IconSize::Small)
-                        .icon_color(Color::Muted),
-                )
-                .anchor(gpui::Corner::TopRight)
-                .offset(gpui::Point {
-                    x: px(0.),
-                    y: px(1.),
-                })
-                .into_any_element()
-        }
+                Some(menu)
+            })
+            .trigger(
+                IconButton::new(trigger_id, IconName::Ellipsis)
+                    .selected_style(ButtonStyle::Tinted(TintColor::Accent))
+                    .icon_size(IconSize::Small)
+                    .icon_color(Color::Muted),
+            )
+            .anchor(gpui::Corner::TopRight)
+            .offset(gpui::Point {
+                x: px(0.),
+                y: px(1.),
+            })
+            .into_any_element()
     }
 
     fn render_sticky_header(
@@ -2687,12 +2634,25 @@ impl Sidebar {
             })
             .unwrap_or_default();
 
-        #[cfg(target_os = "macos")]
-        {
-            return IconButton::new("open-project", IconName::OpenFolder)
-                .icon_size(IconSize::Small)
-                .selected_style(ButtonStyle::Tinted(TintColor::Accent))
-                .tooltip(|_window, cx| {
+        let popover_handle = self.recent_projects_popover_handle.clone();
+        PopoverMenu::new("sidebar-recent-projects-menu")
+            .with_handle(popover_handle)
+            .menu(move |window, cx| {
+                workspace.as_ref().map(|ws| {
+                    SidebarRecentProjects::popover(
+                        ws.clone(),
+                        sibling_workspace_ids.clone(),
+                        focus_handle.clone(),
+                        window,
+                        cx,
+                    )
+                })
+            })
+            .trigger_with_tooltip(
+                IconButton::new("open-project", IconName::OpenFolder)
+                    .icon_size(IconSize::Small)
+                    .selected_style(ButtonStyle::Tinted(TintColor::Accent)),
+                |_window, cx| {
                     Tooltip::for_action(
                         "Add Project",
                         &OpenRecent {
@@ -2700,64 +2660,14 @@ impl Sidebar {
                         },
                         cx,
                     )
-                })
-                .on_click(move |_, window, cx| {
-                    if let Some(workspace) = workspace.as_ref() {
-                        let popover = SidebarRecentProjects::popover(
-                            workspace.clone(),
-                            sibling_workspace_ids.clone(),
-                            focus_handle.clone(),
-                            window,
-                            cx,
-                        );
-                        window.show_native_popover(
-                            NativePopover::new(360.0, 420.0)
-                                .behavior(NativePopoverBehavior::Transient)
-                                .content_view(popover),
-                            NativePopoverAnchor::ContentElement("open-project".into()),
-                        );
-                    }
-                })
-                .into_any_element();
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            let popover_handle = self.recent_projects_popover_handle.clone();
-            PopoverMenu::new("sidebar-recent-projects-menu")
-                .with_handle(popover_handle)
-                .menu(move |window, cx| {
-                    workspace.as_ref().map(|ws| {
-                        SidebarRecentProjects::popover(
-                            ws.clone(),
-                            sibling_workspace_ids.clone(),
-                            focus_handle.clone(),
-                            window,
-                            cx,
-                        )
-                    })
-                })
-                .trigger_with_tooltip(
-                    IconButton::new("open-project", IconName::OpenFolder)
-                        .icon_size(IconSize::Small)
-                        .selected_style(ButtonStyle::Tinted(TintColor::Accent)),
-                    |_window, cx| {
-                        Tooltip::for_action(
-                            "Add Project",
-                            &OpenRecent {
-                                create_new_window: false,
-                            },
-                            cx,
-                        )
-                    },
-                )
-                .offset(gpui::Point {
-                    x: px(-2.0),
-                    y: px(-2.0),
-                })
-                .anchor(gpui::Corner::BottomRight)
-                .into_any_element()
-        }
+                },
+            )
+            .offset(gpui::Point {
+                x: px(-2.0),
+                y: px(-2.0),
+            })
+            .anchor(gpui::Corner::BottomRight)
+            .into_any_element()
     }
 
     fn render_view_more(
@@ -2970,7 +2880,7 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let has_query = self.has_filter_query(cx);
-        let traffic_lights = cfg!(target_os = "macos") && !window.is_fullscreen();
+        let traffic_lights = false;
         let header_height = platform_title_bar_height(window);
 
         h_flex()
@@ -3020,42 +2930,6 @@ impl Sidebar {
             })
     }
 
-    fn render_sidebar_toggle_button(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        IconButton::new("sidebar-close-toggle", IconName::ThreadsSidebarLeftOpen)
-            .icon_size(IconSize::Small)
-            .tooltip(Tooltip::element(move |_window, cx| {
-                v_flex()
-                    .gap_1()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .justify_between()
-                            .child(Label::new("Toggle Sidebar"))
-                            .child(KeyBinding::for_action(&ToggleWorkspaceSidebar, cx)),
-                    )
-                    .child(
-                        h_flex()
-                            .pt_1()
-                            .gap_2()
-                            .border_t_1()
-                            .border_color(cx.theme().colors().border_variant)
-                            .justify_between()
-                            .child(Label::new("Focus Sidebar"))
-                            .child(KeyBinding::for_action(&FocusWorkspaceSidebar, cx)),
-                    )
-                    .into_any_element()
-            }))
-            .on_click(|_, window, cx| {
-                if let Some(multi_workspace) = window.root::<MultiWorkspace>().flatten() {
-                    multi_workspace.update(cx, |multi_workspace, cx| {
-                        multi_workspace.close_sidebar(window, cx);
-                    });
-                }
-            })
-    }
-}
-
-impl Sidebar {
     fn toggle_archive(&mut self, _: &ToggleArchive, window: &mut Window, cx: &mut Context<Self>) {
         match &self.view {
             SidebarView::ThreadList => self.show_archive(window, cx),
@@ -3172,6 +3046,10 @@ impl Render for Sidebar {
 
         let no_open_projects = !self.contents.has_open_projects;
         let no_search_results = self.contents.entries.is_empty();
+        #[cfg(target_os = "macos")]
+        let hosted_in_native_sidebar = true;
+        #[cfg(not(target_os = "macos"))]
+        let hosted_in_native_sidebar = false;
 
         v_flex()
             .id("workspace-sidebar")
@@ -3199,10 +3077,12 @@ impl Render for Sidebar {
             }))
             .font(ui_font)
             .h_full()
-            .w(self.width)
+            .when(hosted_in_native_sidebar, |this| this.w_full())
+            .when(!hosted_in_native_sidebar, |this| this.w(self.width))
             .bg(bg)
-            .border_r_1()
-            .border_color(color.border)
+            .when(!hosted_in_native_sidebar, |this| {
+                this.border_r_1().border_color(color.border)
+            })
             .map(|this| match &self.view {
                 SidebarView::ThreadList => this
                     .child(self.render_sidebar_header(no_open_projects, window, cx))
@@ -3237,30 +3117,25 @@ impl Render for Sidebar {
                 h_flex()
                     .p_1()
                     .gap_1()
-                    .justify_between()
+                    .justify_end()
                     .border_t_1()
                     .border_color(cx.theme().colors().border)
-                    .child(self.render_sidebar_toggle_button(cx))
                     .child(
-                        h_flex()
-                            .gap_1()
-                            .child(
-                                IconButton::new("archive", IconName::Archive)
-                                    .icon_size(IconSize::Small)
-                                    .toggle_state(matches!(self.view, SidebarView::Archive(..)))
-                                    .tooltip(move |_, cx| {
-                                        Tooltip::for_action(
-                                            "Toggle Archived Threads",
-                                            &ToggleArchive,
-                                            cx,
-                                        )
-                                    })
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.toggle_archive(&ToggleArchive, window, cx);
-                                    })),
-                            )
-                            .child(self.render_recent_projects_button(cx)),
-                    ),
+                        IconButton::new("archive", IconName::Archive)
+                            .icon_size(IconSize::Small)
+                            .toggle_state(matches!(self.view, SidebarView::Archive(..)))
+                            .tooltip(move |_, cx| {
+                                Tooltip::for_action(
+                                    "Toggle Archived Threads",
+                                    &ToggleArchive,
+                                    cx,
+                                )
+                            })
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_archive(&ToggleArchive, window, cx);
+                            })),
+                    )
+                    .child(self.render_recent_projects_button(cx)),
             )
     }
 }

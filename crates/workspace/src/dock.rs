@@ -1046,9 +1046,6 @@ impl Dock {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .when_some(self.dock_button_bar.clone(), |this, dock_button_bar| {
-                this.child(dock_button_bar)
-            })
             .when_some(content, |this, panel| {
                 this.child(
                     div()
