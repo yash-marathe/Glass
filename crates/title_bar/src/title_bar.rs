@@ -574,7 +574,7 @@ impl TitleBar {
     pub fn toggle_lsp_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         #[cfg(target_os = "macos")]
         {
-            self.show_lsp_menu(window, cx);
+            self.show_lsp_overlay(window, cx);
         }
     }
 

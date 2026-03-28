@@ -27,7 +27,7 @@ impl TitleBar {
                             .and_then(|item| item.downcast::<TitleBar>().ok())
                     {
                         title_bar.update(cx, |title_bar, cx| {
-                            title_bar.show_lsp_menu(window, cx);
+                            title_bar.show_lsp_overlay(window, cx);
                         });
                     }
                 }),

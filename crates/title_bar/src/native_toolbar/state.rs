@@ -15,5 +15,5 @@ pub(crate) struct NativeToolbarState {
     pub(crate) status_image_info: Option<String>,
     pub(crate) active_editor_subscription: Option<Subscription>,
     pub(crate) active_image_subscription: Option<Subscription>,
-    pub(crate) open_toolbar_popover_item_id: Option<SharedString>,
+    pub(crate) open_toolbar_overlay_item_id: Option<SharedString>,
 }

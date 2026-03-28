@@ -42,7 +42,7 @@ impl TitleBar {
                             .and_then(|item| item.downcast::<TitleBar>().ok())
                     {
                         title_bar.update(cx, |title_bar, cx| {
-                            title_bar.show_recent_projects_popover(window, cx);
+                            title_bar.show_recent_projects_overlay(window, cx);
                         });
                     }
                 }),
@@ -84,7 +84,7 @@ impl TitleBar {
                             .and_then(|item| item.downcast::<TitleBar>().ok())
                     {
                         title_bar.update(cx, |title_bar, cx| {
-                            title_bar.show_branch_popover(window, cx);
+                            title_bar.show_branch_overlay(window, cx);
                         });
                     }
                 }),

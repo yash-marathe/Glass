@@ -1,14 +1,66 @@
 use crate::TitleBar;
 use gpui::{
-    DismissEvent, Focusable, NativePopover, NativePopoverAnchor, NativePopoverBehavior,
-    SharedString, Window,
+    DismissEvent, Focusable, NativePanel, NativePanelAnchor, NativePanelLevel, NativePanelStyle,
+    Render, SharedString, Window,
 };
 use std::collections::HashSet;
 use ui::ContextMenu;
 use workspace::WorkspaceId;
 
 impl TitleBar {
-    fn show_toolbar_context_menu_popover(
+    fn dismiss_toolbar_overlay(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.native_toolbar_state.open_toolbar_overlay_item_id = None;
+        window.dismiss_native_panel();
+        cx.notify();
+    }
+
+    fn toggle_toolbar_hosted_overlay<V: Render>(
+        &mut self,
+        view: gpui::Entity<V>,
+        item_id: SharedString,
+        width: f64,
+        height: f64,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self
+            .native_toolbar_state
+            .open_toolbar_overlay_item_id
+            .as_ref()
+            == Some(&item_id)
+        {
+            self.dismiss_toolbar_overlay(window, cx);
+            return;
+        }
+
+        let weak_title_bar = cx.entity().downgrade();
+        self.native_toolbar_state.open_toolbar_overlay_item_id = Some(item_id.clone());
+        window.dismiss_native_panel();
+        window.show_native_panel(
+            NativePanel::new(width, height)
+                .style(NativePanelStyle::Borderless)
+                .level(NativePanelLevel::PopUpMenu)
+                .transient(true)
+                .corner_radius(12.0)
+                .on_close(move |_, _, cx| {
+                    weak_title_bar
+                        .update(cx, |title_bar, cx| {
+                            title_bar.native_toolbar_state.open_toolbar_overlay_item_id = None;
+                            cx.notify();
+                        })
+                        .ok();
+                })
+                .content_view(view),
+            NativePanelAnchor::ToolbarItem(item_id),
+        );
+        cx.notify();
+    }
+
+    fn show_toolbar_context_menu_overlay(
         &mut self,
         menu: gpui::Entity<ContextMenu>,
         item_id: &'static str,
@@ -20,50 +72,29 @@ impl TitleBar {
         let item_id: SharedString = item_id.into();
         if self
             .native_toolbar_state
-            .open_toolbar_popover_item_id
+            .open_toolbar_overlay_item_id
             .as_ref()
             == Some(&item_id)
         {
-            self.native_toolbar_state.open_toolbar_popover_item_id = None;
-            window.dismiss_native_popover();
-            cx.notify();
+            self.dismiss_toolbar_overlay(window, cx);
             return;
         }
 
-        let weak_title_bar = cx.entity().downgrade();
-        let dismiss_title_bar = weak_title_bar.clone();
+        let dismiss_title_bar = cx.entity().downgrade();
         window
             .subscribe(&menu, cx, move |_, _: &DismissEvent, window, cx| {
-                window.dismiss_native_popover();
                 dismiss_title_bar
                     .update(cx, |title_bar, cx| {
-                        title_bar.native_toolbar_state.open_toolbar_popover_item_id = None;
-                        cx.notify();
+                        title_bar.dismiss_toolbar_overlay(window, cx);
                     })
                     .ok();
             })
             .detach();
 
-        self.native_toolbar_state.open_toolbar_popover_item_id = Some(item_id.clone());
-        window.dismiss_native_popover();
-        window.show_native_popover(
-            NativePopover::new(width, height)
-                .behavior(NativePopoverBehavior::Transient)
-                .on_close(move |_, _, cx| {
-                    weak_title_bar
-                        .update(cx, |title_bar, cx| {
-                            title_bar.native_toolbar_state.open_toolbar_popover_item_id = None;
-                            cx.notify();
-                        })
-                        .ok();
-                })
-                .content_view(menu),
-            NativePopoverAnchor::ToolbarItem(item_id),
-        );
-        cx.notify();
+        self.toggle_toolbar_hosted_overlay(menu, item_id, width, height, window, cx);
     }
 
-    pub(super) fn show_recent_projects_popover(
+    pub(super) fn show_recent_projects_overlay(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
@@ -87,7 +118,7 @@ impl TitleBar {
             })
             .unwrap_or_default();
 
-        let Some(popover) = workspace.upgrade().map(|_| {
+        let Some(overlay) = workspace.upgrade().map(|_| {
             recent_projects::RecentProjects::popover(
                 workspace.clone(),
                 sibling_workspace_ids,
@@ -100,16 +131,17 @@ impl TitleBar {
             return;
         };
 
-        window.dismiss_native_popover();
-        window.show_native_popover(
-            NativePopover::new(360.0, 420.0)
-                .behavior(NativePopoverBehavior::Transient)
-                .content_view(popover),
-            NativePopoverAnchor::ToolbarItem("glass.project_name".into()),
+        self.toggle_toolbar_hosted_overlay(
+            overlay,
+            "glass.project_name".into(),
+            360.0,
+            420.0,
+            window,
+            cx,
         );
     }
 
-    pub(super) fn show_branch_popover(
+    pub(super) fn show_branch_overlay(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
@@ -120,7 +152,7 @@ impl TitleBar {
         let effective_repository = self
             .effective_active_worktree(cx)
             .and_then(|worktree| self.get_repository_for_worktree(&worktree, cx));
-        let popover = git_ui::git_picker::popover(
+        let overlay = git_ui::git_picker::popover(
             workspace.downgrade(),
             effective_repository,
             git_ui::git_picker::GitPickerTab::Branches,
@@ -129,16 +161,21 @@ impl TitleBar {
             cx,
         );
 
-        window.dismiss_native_popover();
-        window.show_native_popover(
-            NativePopover::new(380.0, 480.0)
-                .behavior(NativePopoverBehavior::Transient)
-                .content_view(popover),
-            NativePopoverAnchor::ToolbarItem("glass.branch_name".into()),
+        self.toggle_toolbar_hosted_overlay(
+            overlay,
+            "glass.branch_name".into(),
+            380.0,
+            480.0,
+            window,
+            cx,
         );
     }
 
-    pub(crate) fn show_lsp_menu(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+    pub(crate) fn show_lsp_overlay(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let Some(lsp_button) = self.right_item_view::<language_tools::lsp_button::LspButton>()
         else {
             return;
@@ -150,7 +187,7 @@ impl TitleBar {
             return;
         };
 
-        self.show_toolbar_context_menu_popover(
+        self.show_toolbar_context_menu_overlay(
             menu,
             "glass.status.language_servers",
             320.0,
