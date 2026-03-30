@@ -88,21 +88,6 @@ pub fn handle_key_up(browser: &BrowserTab, keystroke: &Keystroke) {
     browser.send_key_event(&keyup);
 }
 
-pub fn handle_committed_text(browser: &BrowserTab, text: &str) {
-    for character in text.encode_utf16() {
-        let char_event = KeyEvent {
-            type_: KeyEventType::CHAR,
-            modifiers: 0,
-            windows_key_code: character as i32,
-            character,
-            unmodified_character: character,
-            focus_on_editable_field: 1,
-            ..Default::default()
-        };
-        browser.send_key_event(&char_event);
-    }
-}
-
 fn pressed_button_flags(pressed_button: Option<MouseButton>) -> u32 {
     match pressed_button {
         Some(MouseButton::Left) | Some(MouseButton::Navigate(_)) => EVENTFLAG_LEFT_MOUSE_BUTTON,

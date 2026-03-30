@@ -21,9 +21,7 @@ use crate::page_chrome::extract_page_chrome_from_message;
 use crate::permission_handler::{OsrPermissionHandler, PermissionHandlerBuilder};
 use crate::render_handler::{OsrRenderHandler, RenderHandlerBuilder, RenderState};
 use crate::request_handler::{OsrRequestHandler, RequestHandlerBuilder};
-use crate::text_input::{
-    extract_text_input_debug_from_message, extract_text_input_state_from_message,
-};
+use crate::text_input::extract_text_input_state_from_message;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -168,11 +166,6 @@ wrap_client! {
                     .send(crate::events::BrowserEvent::TextInputStateChanged(
                         text_input_state,
                     ));
-                return 1;
-            }
-
-            if let Some(payload) = extract_text_input_debug_from_message(message) {
-                log::info!("[browser::text_input] renderer_debug {payload}");
                 return 1;
             }
 

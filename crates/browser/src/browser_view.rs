@@ -898,10 +898,6 @@ impl BrowserView {
                     .active_tab()
                     .is_some_and(|active_tab| active_tab == &tab_entity);
                 if is_active_tab {
-                    log::info!(
-                        "[browser::text_input] active_tab_state_changed editable={}",
-                        text_input_state.editable
-                    );
                     if !text_input_state.editable {
                         self.clear_ime_state();
                     }
@@ -1147,7 +1143,6 @@ impl EntityInputHandler for BrowserView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        log::info!("[browser::text_input] replace_text text={text:?}");
         self.clear_ime_state();
 
         if !text.is_empty()
@@ -1155,7 +1150,7 @@ impl EntityInputHandler for BrowserView {
         {
             let text = text.to_string();
             tab.update(cx, |tab, _| {
-                crate::input::handle_committed_text(tab, &text);
+                tab.insert_committed_text(&text);
             });
         }
     }
@@ -1168,9 +1163,6 @@ impl EntityInputHandler for BrowserView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        log::info!(
-            "[browser::text_input] compose_text text={new_text:?} selection={new_selected_range:?}"
-        );
         self.ime_marked_text = Some(new_text.to_string());
         self.ime_selected_range = new_selected_range.clone();
 
@@ -1205,9 +1197,7 @@ impl EntityInputHandler for BrowserView {
     }
 
     fn accepts_text_input(&self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let accepts = self.text_input_enabled(cx);
-        log::info!("[browser::text_input] accepts_text_input={accepts}");
-        accepts
+        self.text_input_enabled(cx)
     }
 }
 
