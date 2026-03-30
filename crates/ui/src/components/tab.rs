@@ -3,10 +3,11 @@ use std::cmp::Ordering;
 use gpui::{AnyElement, IntoElement, Stateful};
 use smallvec::SmallVec;
 
-use crate::prelude::*;
+use crate::{
+    ButtonCommon, ButtonSize, Color, IconButton, IconButtonShape, IconName, IconSize, prelude::*,
+};
 
-const START_TAB_SLOT_SIZE: Pixels = px(12.);
-const END_TAB_SLOT_SIZE: Pixels = px(14.);
+const TAB_SLOT_SIZE: Pixels = px(18.);
 
 /// The position of a [`Tab`] within a list of tabs.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -27,6 +28,33 @@ pub enum TabPosition {
 pub enum TabCloseSide {
     Start,
     End,
+}
+
+pub fn tab_row_edge_padding(cx: &App) -> Rems {
+    DynamicSpacing::Base04.rems(cx)
+}
+
+pub fn tab_row_button_gap(cx: &App) -> Rems {
+    DynamicSpacing::Base02.rems(cx)
+}
+
+pub fn tab_row_tab_gap(cx: &App) -> Rems {
+    DynamicSpacing::Base02.rems(cx)
+}
+
+pub fn tab_row_button_group(cx: &App) -> Div {
+    h_flex().items_center().gap(tab_row_button_gap(cx))
+}
+
+pub fn tab_row_icon_button(id: impl Into<ElementId>, icon: IconName) -> IconButton {
+    IconButton::new(id, icon)
+        .shape(IconButtonShape::Square)
+        .size(ButtonSize::None)
+        .icon_size(IconSize::XSmall)
+}
+
+pub fn tab_close_button(id: impl Into<ElementId>) -> IconButton {
+    tab_row_icon_button(id, IconName::Close).icon_color(Color::Muted)
 }
 
 #[derive(IntoElement, RegisterComponent)]
@@ -126,12 +154,12 @@ impl RenderOnce for Tab {
 
         let (start_slot, end_slot) = {
             let start_slot = h_flex()
-                .size(START_TAB_SLOT_SIZE)
+                .size(TAB_SLOT_SIZE)
                 .justify_center()
                 .children(self.start_slot);
 
             let end_slot = h_flex()
-                .size(END_TAB_SLOT_SIZE)
+                .size(TAB_SLOT_SIZE)
                 .justify_center()
                 .children(self.end_slot);
 
@@ -154,8 +182,8 @@ impl RenderOnce for Tab {
             })
             .active(|style| style.bg(tab_active_bg))
             .map(|this| match self.position {
-                TabPosition::First => this.ml_1(),
-                TabPosition::Last => this.mr_1(),
+                TabPosition::First => this,
+                TabPosition::Last => this,
                 TabPosition::Middle(Ordering::Equal)
                 | TabPosition::Middle(Ordering::Less)
                 | TabPosition::Middle(Ordering::Greater) => this,

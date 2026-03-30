@@ -20,7 +20,7 @@ use gpui::{
     DragMoveEvent, Entity, EntityId, EventEmitter, ExternalPaths, FocusHandle, FocusOutEvent,
     Focusable, KeyContext, MouseButton, NavigationDirection, Pixels, Point, PromptLevel, Render,
     ScrollHandle, Subscription, Task, WeakEntity, WeakFocusHandle, Window, actions, anchored,
-    deferred, native_icon_button, native_image_view, prelude::*,
+    deferred, prelude::*,
 };
 use itertools::Itertools;
 use language::{Capability, DiagnosticSeverity};
@@ -45,7 +45,8 @@ use theme::ThemeSettings;
 use ui::{
     ContextMenu, ContextMenuEntry, ContextMenuItem, DecoratedIcon, IconButtonShape, IconDecoration,
     IconDecorationKind, Indicator, PopoverMenu, PopoverMenuHandle, Tab, TabBar, TabPosition,
-    Tooltip, prelude::*, right_click_menu,
+    Tooltip, prelude::*, right_click_menu, tab_close_button, tab_row_button_group,
+    tab_row_edge_padding, tab_row_icon_button, tab_row_tab_gap,
 };
 use util::{ResultExt, debug_panic, maybe, paths::PathStyle, truncate_and_remove_front};
 
@@ -2884,38 +2885,19 @@ impl Pane {
             .start_slot::<Indicator>(indicator)
             .map(|this| {
                 let end_slot = if is_pinned {
-                    IconButton::new("unpin tab", IconName::Pin)
-                        .shape(IconButtonShape::Square)
+                    tab_row_icon_button("unpin tab", IconName::Pin)
                         .icon_color(Color::Muted)
-                        .size(ButtonSize::None)
-                        .icon_size(IconSize::Small)
                         .tooltip(Tooltip::text("Unpin Tab"))
                         .on_click(cx.listener(move |pane, _, window, cx| {
                             pane.unpin_tab_at(ix, window, cx);
                         }))
                         .into_any_element()
                 } else {
-                    let close_button = div()
-                        .id(("close-tab-native", ix))
-                        .relative()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .w(px(16.))
-                        .h(px(16.))
-                        .rounded(px(4.))
-                        .cursor_pointer()
-                        .hover(|style| style.bg(cx.theme().colors().text.opacity(0.09)))
+                    let close_button = tab_close_button(("close-tab", ix))
                         .on_click(cx.listener(move |pane, _, window, cx| {
                             pane.close_item_by_id(item_id, SaveIntent::Close, window, cx)
                                 .detach_and_log_err(cx);
                         }))
-                        .child(
-                            native_image_view(format!("close-tab-icon-{ix}"))
-                                .sf_symbol("xmark")
-                                .w(px(8.))
-                                .h(px(8.)),
-                        )
                         .into_any_element();
                     match show_close_button {
                         ShowCloseButton::Always => close_button,
@@ -3293,8 +3275,8 @@ impl Pane {
 
         let focus_handle = self.focus_handle.clone();
 
-        let navigate_backward = native_icon_button("navigate_backward", "chevron.left")
-            .tooltip("Go Back")
+        let navigate_backward = tab_row_icon_button("navigate_backward", IconName::ChevronLeft)
+            .tooltip(Tooltip::text("Go Back"))
             .on_click({
                 let entity = cx.entity();
                 move |_, window, cx| {
@@ -3305,8 +3287,8 @@ impl Pane {
             })
             .disabled(!self.can_navigate_backward());
 
-        let navigate_forward = native_icon_button("navigate_forward", "chevron.right")
-            .tooltip("Go Forward")
+        let navigate_forward = tab_row_icon_button("navigate_forward", IconName::ChevronRight)
+            .tooltip(Tooltip::text("Go Forward"))
             .on_click({
                 let entity = cx.entity();
                 move |_, window, cx| {
@@ -3424,6 +3406,8 @@ impl Pane {
                 let is_scrollable = max_scroll > px(2.0);
                 let has_active_unpinned_tab = self.active_item_index >= self.pinned_tab_count;
                 h_flex()
+                    .gap(tab_row_tab_gap(cx))
+                    .px(tab_row_edge_padding(cx))
                     .children(pinned_tabs)
                     .when(is_scrollable && is_scrolled, |this| {
                         this.when(has_active_unpinned_tab, |this| this.border_r_2())
@@ -3459,6 +3443,8 @@ impl Pane {
                     .debug_selector(|| "pinned_tabs_row".into())
                     .overflow_x_scroll()
                     .w_full()
+                    .gap(tab_row_tab_gap(cx))
+                    .px(tab_row_edge_padding(cx))
                     .children(pinned_tabs)
                     .child(self.render_pinned_tab_bar_drop_target(cx)),
             );
@@ -3486,6 +3472,8 @@ impl Pane {
             .id("unpinned tabs")
             .overflow_x_scroll()
             .w_full()
+            .gap(tab_row_tab_gap(cx))
+            .px(tab_row_edge_padding(cx))
             .track_scroll(&self.tab_bar_scroll_handle)
             .on_scroll_wheel(cx.listener(|this, _, _, _| {
                 this.suppress_scroll = true;
@@ -4059,14 +4047,12 @@ fn default_render_tab_bar_buttons(
     };
     // Ideally we would return a vec of elements here to pass directly to the [TabBar]'s
     // `end_slot`, but due to needing a view here that isn't possible.
-    let right_children = h_flex()
-        // Instead we need to replicate the spacing from the [TabBar]'s `end_slot` here.
-        .gap(DynamicSpacing::Base04.rems(cx))
+    let right_children = tab_row_button_group(cx)
         .child(
             PopoverMenu::new("pane-tab-bar-popover-menu")
                 .window_overlay()
                 .trigger_with_tooltip(
-                    IconButton::new("plus", IconName::Plus).icon_size(IconSize::Small),
+                    tab_row_icon_button("plus", IconName::Plus),
                     Tooltip::text("New..."),
                 )
                 .anchor(Corner::TopRight)
@@ -4094,8 +4080,7 @@ fn default_render_tab_bar_buttons(
             PopoverMenu::new("pane-tab-bar-split")
                 .window_overlay()
                 .trigger_with_tooltip(
-                    IconButton::new("split", IconName::Split)
-                        .icon_size(IconSize::Small)
+                    tab_row_icon_button("split", IconName::Split)
                         .disabled(!can_clone && !can_split_move),
                     Tooltip::text("Split Pane"),
                 )
@@ -4121,8 +4106,7 @@ fn default_render_tab_bar_buttons(
         )
         .child({
             let zoomed = pane.is_zoomed();
-            IconButton::new("toggle_zoom", IconName::Maximize)
-                .icon_size(IconSize::Small)
+            tab_row_icon_button("toggle_zoom", IconName::Maximize)
                 .toggle_state(zoomed)
                 .selected_icon(IconName::Minimize)
                 .on_click(cx.listener(|pane, _, window, cx| {

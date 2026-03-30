@@ -1,8 +1,8 @@
 use gpui::{AnyElement, ScrollHandle};
 use smallvec::SmallVec;
 
-use crate::Tab;
 use crate::prelude::*;
+use crate::{Tab, tab_row_button_gap, tab_row_edge_padding};
 
 #[derive(IntoElement, RegisterComponent)]
 pub struct TabBar {
@@ -103,9 +103,9 @@ impl RenderOnce for TabBar {
                 this.child(
                     h_flex()
                         .flex_none()
-                        .gap(DynamicSpacing::Base03.rems(cx))
-                        .pl(DynamicSpacing::Base06.rems(cx))
-                        .pr(DynamicSpacing::Base02.rems(cx))
+                        .items_center()
+                        .gap(tab_row_button_gap(cx))
+                        .px(tab_row_edge_padding(cx))
                         .border_b_1()
                         .border_color(cx.theme().colors().border)
                         .children(self.start_children),
@@ -141,8 +141,9 @@ impl RenderOnce for TabBar {
                 this.child(
                     h_flex()
                         .flex_none()
-                        .gap(DynamicSpacing::Base04.rems(cx))
-                        .px(DynamicSpacing::Base06.rems(cx))
+                        .items_center()
+                        .gap(tab_row_button_gap(cx))
+                        .px(tab_row_edge_padding(cx))
                         .border_color(cx.theme().colors().border)
                         .border_b_1()
                         .children(self.end_children),

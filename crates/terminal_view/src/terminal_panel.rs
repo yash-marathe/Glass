@@ -23,6 +23,7 @@ use task::{RevealStrategy, RevealTarget, Shell, ShellBuilder, SpawnInTerminal, T
 use terminal::{Terminal, terminal_settings::TerminalSettings};
 use ui::{
     ButtonLike, Clickable, ContextMenu, PopoverMenu, SplitButton, Toggleable, Tooltip, prelude::*,
+    tab_row_button_group, tab_row_icon_button,
 };
 use util::{ResultExt, TryFutureExt};
 use workspace::{
@@ -350,8 +351,7 @@ impl TerminalPanel {
                 }
                 let focus_handle = pane.focus_handle(cx);
                 let zoomed = pane.is_zoomed();
-                let zoom_button = IconButton::new("toggle_zoom", IconName::Maximize)
-                    .icon_size(IconSize::Small)
+                let zoom_button = tab_row_icon_button("toggle_zoom", IconName::Maximize)
                     .toggle_state(zoomed)
                     .selected_icon(IconName::Minimize)
                     .on_click(cx.listener(|pane, _, window, cx| {
@@ -365,13 +365,12 @@ impl TerminalPanel {
                         )
                     });
 
-                let right_children: Option<AnyElement> = h_flex()
-                    .gap(DynamicSpacing::Base02.rems(cx))
+                let right_children: Option<AnyElement> = tab_row_button_group(cx)
                     .child(
                         PopoverMenu::new("terminal-tab-bar-popover-menu")
                             .window_overlay()
                             .trigger_with_tooltip(
-                                IconButton::new("plus", IconName::Plus).icon_size(IconSize::Small),
+                                tab_row_icon_button("plus", IconName::Plus),
                                 Tooltip::text("New…"),
                             )
                             .anchor(Corner::TopRight)
@@ -398,8 +397,7 @@ impl TerminalPanel {
                         PopoverMenu::new("terminal-pane-tab-bar-split")
                             .window_overlay()
                             .trigger_with_tooltip(
-                                IconButton::new("terminal-pane-split", IconName::Split)
-                                    .icon_size(IconSize::Small),
+                                tab_row_icon_button("terminal-pane-split", IconName::Split),
                                 Tooltip::text("Split Pane"),
                             )
                             .anchor(Corner::TopRight)

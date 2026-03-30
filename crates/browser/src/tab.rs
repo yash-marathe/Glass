@@ -121,6 +121,25 @@ pub struct BrowserTab {
 impl EventEmitter<TabEvent> for BrowserTab {}
 
 impl BrowserTab {
+    fn debug_dump_text_input(&self, reason: &str) {
+        self.with_focused_frame(|frame| {
+            let script = format!(
+                "(() => {{
+                    if (window.{dump}) {{
+                        window.{dump}({reason:?});
+                        setTimeout(() => window.{dump} && window.{dump}('post_commit_timeout'), 0);
+                        requestAnimationFrame(() => window.{dump} && window.{dump}('post_commit_raf'));
+                    }}
+                }})();",
+                dump = crate::text_input::TEXT_INPUT_DEBUG_DUMP_FN,
+                reason = reason,
+            );
+            let script = cef::CefString::from(script.as_str());
+            let url = cef::CefString::from("");
+            frame.execute_java_script(Some(&script), Some(&url), 0);
+        });
+    }
+
     pub fn new(_cx: &mut Context<Self>) -> Self {
         let render_state = Arc::new(Mutex::new(RenderState::default()));
         let (sender, receiver) = events::event_channel();
@@ -591,6 +610,9 @@ impl BrowserTab {
 
     pub fn ime_set_composition(&self, text: &str, selection_range: Option<std::ops::Range<usize>>) {
         self.with_host(|host| {
+            log::info!(
+                "[browser::cef_ime] set_composition text={text:?} selection={selection_range:?}"
+            );
             let text = cef::CefString::from(text);
             let selection_range = selection_range.map(|range| cef::Range {
                 from: range.start as u32,
@@ -598,25 +620,32 @@ impl BrowserTab {
             });
             host.ime_set_composition(Some(&text), None, None, selection_range.as_ref());
         });
+        self.debug_dump_text_input("post_set_composition");
     }
 
     pub fn ime_commit_text(&self, text: &str) {
         self.with_host(|host| {
+            log::info!("[browser::cef_ime] commit_text text={text:?}");
             let text = cef::CefString::from(text);
             host.ime_commit_text(Some(&text), None, 0);
         });
+        self.debug_dump_text_input("post_commit_immediate");
     }
 
     pub fn ime_finish_composing_text(&self, keep_selection: bool) {
         self.with_host(|host| {
+            log::info!("[browser::cef_ime] finish_composing keep_selection={keep_selection}");
             host.ime_finish_composing_text(if keep_selection { 1 } else { 0 });
         });
+        self.debug_dump_text_input("post_finish_composing");
     }
 
     pub fn ime_cancel_composition(&self) {
         self.with_host(|host| {
+            log::info!("[browser::cef_ime] cancel_composition");
             host.ime_cancel_composition();
         });
+        self.debug_dump_text_input("post_cancel_composition");
     }
 
     pub fn send_key_event(&self, event: &cef::KeyEvent) {

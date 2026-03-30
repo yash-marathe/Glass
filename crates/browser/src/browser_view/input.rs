@@ -60,7 +60,11 @@ impl BrowserView {
             return;
         }
 
-        let route = key_down_dispatch(&event.keystroke, self.text_input_active(cx));
+        let route = key_down_dispatch(
+            &event.keystroke,
+            self.active_tab_text_input_state(cx).editable,
+            self.text_input_composing(),
+        );
         if route != BrowserKeyDispatch::Browser {
             return;
         }
@@ -89,7 +93,11 @@ impl BrowserView {
             return;
         }
 
-        let route = key_up_dispatch(&event.keystroke, self.text_input_active(cx));
+        let route = key_up_dispatch(
+            &event.keystroke,
+            self.active_tab_text_input_state(cx).editable,
+            self.text_input_composing(),
+        );
         if route != BrowserKeyDispatch::Browser {
             return;
         }

@@ -14,8 +14,8 @@ use gpui::{
     Action, AnyElement, Context, IntoElement, NativeToolbar, NativeToolbarDisplayMode,
     NativeToolbarItem, NativeToolbarSizeMode, Window,
 };
-use workspace::ToggleSidebar;
 use settings::Settings;
+use workspace::ToggleSidebar;
 use workspace_modes::ModeId;
 
 pub(crate) use state::NativeToolbarState;

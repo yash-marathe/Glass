@@ -241,9 +241,13 @@ impl BrowserView {
             .unwrap_or_default()
     }
 
-    pub(crate) fn text_input_active(&self, cx: &App) -> bool {
+    pub(crate) fn text_input_enabled(&self, cx: &App) -> bool {
         self.active_tab_text_input_state(cx)
             .is_active(self.ime_marked_text.is_some())
+    }
+
+    pub(crate) fn text_input_composing(&self) -> bool {
+        self.ime_marked_text.is_some()
     }
 
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -894,6 +898,10 @@ impl BrowserView {
                     .active_tab()
                     .is_some_and(|active_tab| active_tab == &tab_entity);
                 if is_active_tab {
+                    log::info!(
+                        "[browser::text_input] active_tab_state_changed editable={}",
+                        text_input_state.editable
+                    );
                     if !text_input_state.editable {
                         self.clear_ime_state();
                     }
@@ -1139,6 +1147,7 @@ impl EntityInputHandler for BrowserView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        log::info!("[browser::text_input] replace_text text={text:?}");
         self.clear_ime_state();
 
         if !text.is_empty()
@@ -1146,7 +1155,7 @@ impl EntityInputHandler for BrowserView {
         {
             let text = text.to_string();
             tab.update(cx, |tab, _| {
-                tab.ime_commit_text(&text);
+                crate::input::handle_committed_text(tab, &text);
             });
         }
     }
@@ -1159,6 +1168,9 @@ impl EntityInputHandler for BrowserView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        log::info!(
+            "[browser::text_input] compose_text text={new_text:?} selection={new_selected_range:?}"
+        );
         self.ime_marked_text = Some(new_text.to_string());
         self.ime_selected_range = new_selected_range.clone();
 
@@ -1193,7 +1205,9 @@ impl EntityInputHandler for BrowserView {
     }
 
     fn accepts_text_input(&self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
-        self.text_input_active(cx)
+        let accepts = self.text_input_enabled(cx);
+        log::info!("[browser::text_input] accepts_text_input={accepts}");
+        accepts
     }
 }
 

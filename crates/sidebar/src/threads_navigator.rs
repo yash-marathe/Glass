@@ -14,8 +14,9 @@ use agent_ui::{
 use chrono::Utc;
 use editor::Editor;
 use gpui::{
-    Action as _, AnyElement, AnyView, App, Context, Entity, FocusHandle, Focusable, ListState,
-    Pixels, Render, SharedString, WeakEntity, Window, WindowHandle, list, prelude::*, px,
+    Action as _, AnyElement, AnyView, App, ClickEvent, Context, DismissEvent, Entity, FocusHandle,
+    Focusable, ListState, Pixels, Render, SharedString, WeakEntity, Window, WindowHandle, list,
+    prelude::*, px,
 };
 use menu::{
     Cancel, Confirm, SelectChild, SelectFirst, SelectLast, SelectNext, SelectParent, SelectPrevious,
@@ -27,12 +28,12 @@ use ui::utils::platform_title_bar_height;
 use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 use theme::ActiveTheme;
 use ui::{
     AgentThreadStatus, CommonAnimationExt, ContextMenu, Divider, HighlightedLabel, KeyBinding,
-    PopoverMenu, PopoverMenuHandle, Tab, ThreadItem, TintColor, ToggleButtonGroup,
-    ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip, WithScrollbar, prelude::*,
+    PopoverMenu, PopoverMenuHandle, Tab, ThreadItem, TintColor, Tooltip, WithScrollbar, prelude::*,
 };
 use util::ResultExt as _;
 use util::path_list::PathList;
@@ -392,6 +393,51 @@ impl ProjectSidebarSurface {
     fn threads_view(&self, _cx: &App) -> Option<AnyView> {
         Some(self.threads_navigator.clone().into())
     }
+
+    fn render_tab_button(
+        &self,
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        selected: bool,
+        on_click: impl Fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let selected_background = theme.colors().text.opacity(0.14);
+        let hover_background = theme.colors().text.opacity(0.09);
+        let label = label.into();
+
+        div()
+            .id(id.into())
+            .relative()
+            .flex()
+            .items_center()
+            .justify_center()
+            .flex_1()
+            .h(px(28.))
+            .px_2()
+            .rounded(theme.component_radius().tab.unwrap_or(px(8.0)))
+            .when(selected, |this| this.bg(selected_background))
+            .when(!selected, |this| {
+                this.hover(move |style| style.bg(hover_background))
+            })
+            .cursor_pointer()
+            .child(
+                div()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(Label::new(label).size(LabelSize::Small).color(if selected {
+                        Color::Default
+                    } else {
+                        Color::Muted
+                    })),
+            )
+            .on_click(cx.listener(move |this, event, window, cx| {
+                on_click(this, event, window, cx);
+                this.focus_handle.focus(window, cx);
+            }))
+    }
 }
 
 impl Focusable for ProjectSidebarSurface {
@@ -430,12 +476,6 @@ impl WorkspaceSidebar for ProjectSidebarSurface {
 
 impl Render for ProjectSidebarSurface {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected_index = match self.active_tab {
-            ProjectSidebarTab::Files => 0,
-            ProjectSidebarTab::Threads => 1,
-        };
-        let active_workspace = self.active_workspace(cx);
-
         let content = match self.active_tab {
             ProjectSidebarTab::Files => self.project_panel_view(cx),
             ProjectSidebarTab::Threads => self.threads_view(cx),
@@ -452,59 +492,31 @@ impl Render for ProjectSidebarSurface {
                     .px_1p5()
                     .pt_1p5()
                     .pb_1()
-                    .gap_2()
                     .border_b_1()
                     .border_color(cx.theme().colors().border)
                     .child(
-                        ToggleButtonGroup::single_row(
-                            "project-sidebar-tabs",
-                            [
-                                ToggleButtonSimple::new("Files", {
-                                    cx.listener(|this, _, _, cx| {
-                                        this.set_active_tab(ProjectSidebarTab::Files, cx);
-                                    })
-                                }),
-                                ToggleButtonSimple::new("Threads", {
-                                    cx.listener(|this, _, _, cx| {
-                                        this.set_active_tab(ProjectSidebarTab::Threads, cx);
-                                    })
-                                }),
-                            ],
-                        )
-                        .style(ToggleButtonGroupStyle::Filled)
-                        .full_width()
-                        .selected_index(selected_index),
-                    )
-                    .when_some(active_workspace, |this, workspace| {
-                        this.child(
-                            PopoverMenu::new("project-navigation-menu")
-                                .window_overlay()
-                                .menu({
-                                    let multi_workspace = self.multi_workspace.clone();
-                                    move |window, cx| {
-                                        Some(build_project_navigation_context_menu(
-                                            workspace.clone(),
-                                            multi_workspace.clone(),
-                                            window,
-                                            cx,
-                                        ))
-                                    }
-                                })
-                                .trigger(
-                                    IconButton::new(
-                                        "project-navigation-menu-trigger",
-                                        IconName::Ellipsis,
-                                    )
-                                    .icon_size(IconSize::Small)
-                                    .icon_color(Color::Muted),
-                                )
-                                .anchor(gpui::Corner::TopRight)
-                                .offset(gpui::Point {
-                                    x: px(0.),
-                                    y: px(1.),
-                                }),
-                        )
-                    }),
+                        h_flex()
+                            .w_full()
+                            .gap_1()
+                            .child(self.render_tab_button(
+                                "project-sidebar-files-tab",
+                                "Files",
+                                self.active_tab == ProjectSidebarTab::Files,
+                                |this, _, _, cx| {
+                                    this.set_active_tab(ProjectSidebarTab::Files, cx);
+                                },
+                                cx,
+                            ))
+                            .child(self.render_tab_button(
+                                "project-sidebar-threads-tab",
+                                "Threads",
+                                self.active_tab == ProjectSidebarTab::Threads,
+                                |this, _, _, cx| {
+                                    this.set_active_tab(ProjectSidebarTab::Threads, cx);
+                                },
+                                cx,
+                            )),
+                    ),
             )
             .child(div().flex_1().size_full().overflow_hidden().child(content))
     }
@@ -534,6 +546,7 @@ pub struct ThreadsNavigator {
     agent_panel_visible: bool,
     active_thread_is_draft: bool,
     hovered_thread_index: Option<usize>,
+    project_header_menu_ix: Option<usize>,
     collapsed_groups: HashSet<PathList>,
     expanded_groups: HashMap<PathList, usize>,
     view: SidebarView,
@@ -658,6 +671,7 @@ impl ThreadsNavigator {
             agent_panel_visible: false,
             active_thread_is_draft: false,
             hovered_thread_index: None,
+            project_header_menu_ix: None,
             collapsed_groups: HashSet::new(),
             expanded_groups: HashMap::new(),
             view: SidebarView::default(),
@@ -1542,6 +1556,7 @@ impl ThreadsNavigator {
         let show_new_thread_button = !has_new_thread_entry && !self.has_filter_query(cx);
 
         let workspace_for_open = workspace.clone();
+        let workspace_for_menu = workspace.clone();
 
         let path_list_for_toggle = path_list.clone();
         let path_list_for_collapse = path_list.clone();
@@ -1628,10 +1643,14 @@ impl ThreadsNavigator {
                 let path_list_for_new_thread = path_list.clone();
 
                 h_flex()
-                    .visible_on_hover(group_name)
+                    .when(
+                        cfg!(not(target_os = "macos")) && self.project_header_menu_ix != Some(ix),
+                        |this| this.visible_on_hover(group_name),
+                    )
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
                         cx.stop_propagation();
                     })
+                    .child(self.render_project_header_menu(ix, id_prefix, &workspace_for_menu, cx))
                     .when(view_more_expanded && !is_collapsed, |this| {
                         this.child(
                             IconButton::new(
@@ -1711,6 +1730,64 @@ impl ThreadsNavigator {
                 this.selection = None;
                 this.toggle_collapse(&path_list_for_toggle, window, cx);
             }))
+            .into_any_element()
+    }
+
+    fn render_project_header_menu(
+        &self,
+        ix: usize,
+        id_prefix: &str,
+        workspace: &Entity<Workspace>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let workspace_for_menu = workspace.clone();
+        let multi_workspace = self.multi_workspace.clone();
+        let this = cx.weak_entity();
+        let trigger_id = SharedString::from(format!("{id_prefix}-ellipsis-menu-{ix}"));
+
+        PopoverMenu::new(format!("{id_prefix}project-header-menu-{ix}"))
+            .on_open(Rc::new({
+                let this = this.clone();
+                move |_window, cx| {
+                    this.update(cx, |sidebar, cx| {
+                        sidebar.project_header_menu_ix = Some(ix);
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            }))
+            .menu(move |window, cx| {
+                let menu = build_project_navigation_context_menu(
+                    workspace_for_menu.clone(),
+                    multi_workspace.clone(),
+                    window,
+                    cx,
+                );
+
+                let this = this.clone();
+                window
+                    .subscribe(&menu, cx, move |_, _: &DismissEvent, _window, cx| {
+                        this.update(cx, |sidebar, cx| {
+                            sidebar.project_header_menu_ix = None;
+                            cx.notify();
+                        })
+                        .ok();
+                    })
+                    .detach();
+
+                Some(menu)
+            })
+            .trigger(
+                IconButton::new(trigger_id, IconName::Ellipsis)
+                    .selected_style(ButtonStyle::Tinted(TintColor::Accent))
+                    .icon_size(IconSize::Small)
+                    .icon_color(Color::Muted),
+            )
+            .anchor(gpui::Corner::TopRight)
+            .offset(gpui::Point {
+                x: px(0.),
+                y: px(1.),
+            })
             .into_any_element()
     }
 
@@ -3266,6 +3343,7 @@ mod tests {
     use agent_ui::test_support::{active_session_id, open_thread_with_connection, send_message};
     use assistant_text_thread::TextThreadStore;
     use chrono::DateTime;
+    use feature_flags::FeatureFlagAppExt as _;
     use fs::FakeFs;
     use gpui::TestAppContext;
     use pretty_assertions::assert_eq;

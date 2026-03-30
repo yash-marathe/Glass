@@ -8,7 +8,7 @@
 use crate::events::{BrowserEvent, EventSender};
 use cef::{
     AcceleratedPaintInfo, Browser, ImplRenderHandler, PaintElementType, Rect, RenderHandler,
-    ScreenInfo, WrapRenderHandler, rc::Rc as _, wrap_render_handler,
+    ScreenInfo, TextInputMode, WrapRenderHandler, rc::Rc as _, wrap_render_handler,
 };
 use core_foundation::base::TCFType;
 use core_video::pixel_buffer::CVPixelBuffer;
@@ -154,6 +154,36 @@ wrap_render_handler! {
         ) {
             // Fallback: should not be called when shared_texture_enabled is set.
             log::warn!("[browser::render_handler] on_paint() called unexpectedly (shared_texture_enabled should prevent this)");
+        }
+
+        fn on_ime_composition_range_changed(
+            &self,
+            _browser: Option<&mut Browser>,
+            selected_range: Option<&cef::Range>,
+            character_bounds: Option<&[Rect]>,
+        ) {
+            let selected_range = selected_range.map(|range| (range.from, range.to));
+            let bounds = character_bounds
+                .map(|bounds| {
+                    bounds
+                        .iter()
+                        .take(4)
+                        .map(|rect| (rect.x, rect.y, rect.width, rect.height))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            log::info!(
+                "[browser::cef_ime] composition_range_changed selected={selected_range:?} sample_bounds={bounds:?} count={}",
+                character_bounds.map(|bounds| bounds.len()).unwrap_or(0)
+            );
+        }
+
+        fn on_virtual_keyboard_requested(
+            &self,
+            _browser: Option<&mut Browser>,
+            input_mode: TextInputMode,
+        ) {
+            log::info!("[browser::cef_ime] virtual_keyboard_requested mode={input_mode:?}");
         }
     }
 }

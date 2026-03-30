@@ -357,7 +357,6 @@ impl BrowserView {
         let this = cx.entity();
         let input_target = this.clone();
         let focus_handle = self.focus_handle.clone();
-        let enable_text_input = self.text_input_active(cx);
         let bounds_tracker = canvas(
             move |bounds, _window, cx| {
                 this.update(cx, |view, _| {
@@ -366,13 +365,11 @@ impl BrowserView {
                 bounds
             },
             move |bounds, _, window, cx| {
-                if enable_text_input {
-                    window.handle_input(
-                        &focus_handle,
-                        ElementInputHandler::new(bounds, input_target.clone()),
-                        cx,
-                    );
-                }
+                window.handle_input(
+                    &focus_handle,
+                    ElementInputHandler::new(bounds, input_target.clone()),
+                    cx,
+                );
             },
         )
         .absolute()

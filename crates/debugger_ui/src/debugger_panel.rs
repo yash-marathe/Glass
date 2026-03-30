@@ -34,6 +34,8 @@ use task::{DebugScenario, SharedTaskContext};
 use tree_sitter::{Query, StreamingIterator as _};
 use ui::{
     ContextMenu, Divider, PopoverMenu, PopoverMenuHandle, SplitButton, Tab, Tooltip, prelude::*,
+    tab_close_button, tab_row_button_gap, tab_row_button_group, tab_row_edge_padding,
+    tab_row_icon_button,
 };
 use util::redact::redact_command;
 use util::rel_path::RelPath;
@@ -617,8 +619,7 @@ impl DebugPanel {
         let div = if is_side { v_flex() } else { h_flex() };
 
         let new_session_button = || {
-            IconButton::new("debug-new-session", IconName::Plus)
-                .icon_size(IconSize::Small)
+            tab_row_icon_button("debug-new-session", IconName::Plus)
                 .on_click({
                     move |_, window, cx| window.dispatch_action(crate::Start.boxed_clone(), cx)
                 })
@@ -636,8 +637,7 @@ impl DebugPanel {
         };
 
         let edit_debug_json_button = || {
-            IconButton::new("debug-edit-debug-json", IconName::Code)
-                .icon_size(IconSize::Small)
+            tab_row_icon_button("debug-edit-debug-json", IconName::Code)
                 .on_click(|_, window, cx| {
                     window.dispatch_action(zed_actions::OpenProjectDebugTasks.boxed_clone(), cx);
                 })
@@ -645,31 +645,26 @@ impl DebugPanel {
         };
 
         let documentation_button = || {
-            IconButton::new("debug-open-documentation", IconName::CircleHelp)
-                .icon_size(IconSize::Small)
+            tab_row_icon_button("debug-open-documentation", IconName::CircleHelp)
                 .on_click(move |_, _, cx| cx.open_url("https://zed.dev/docs/debugger"))
                 .tooltip(Tooltip::text("Open Documentation"))
         };
 
         let logs_button = || {
-            IconButton::new("debug-open-logs", IconName::Notepad)
-                .icon_size(IconSize::Small)
+            tab_row_icon_button("debug-open-logs", IconName::Notepad)
                 .on_click(move |_, window, cx| {
                     window.dispatch_action(debugger_tools::OpenDebugAdapterLogs.boxed_clone(), cx)
                 })
                 .tooltip(Tooltip::text("Open Debug Adapter Logs"))
         };
 
-        let close_bottom_panel_button = {
-            h_flex().pl_0p5().gap_1().child(
-                IconButton::new("debug-close-panel", IconName::Close)
-                    .icon_size(IconSize::Small)
-                    .on_click(move |_, window, cx| {
-                        window.dispatch_action(workspace::ToggleBottomDock.boxed_clone(), cx)
-                    })
-                    .tooltip(Tooltip::text("Close Panel")),
-            )
-        };
+        let close_bottom_panel_button = tab_row_button_group(cx).child(
+            tab_close_button("debug-close-panel")
+                .on_click(move |_, window, cx| {
+                    window.dispatch_action(workspace::ToggleBottomDock.boxed_clone(), cx)
+                })
+                .tooltip(Tooltip::text("Close Panel")),
+        );
 
         let thread_status = active_session
             .as_ref()
@@ -680,16 +675,19 @@ impl DebugPanel {
         Some(
             div.w_full()
                 .py_1()
-                .px_1p5()
+                .px(tab_row_edge_padding(cx))
                 .justify_between()
                 .border_b_1()
                 .border_color(cx.theme().colors().border)
-                .when(is_side, |this| this.gap_1().h(Tab::container_height(cx)))
+                .when(is_side, |this| {
+                    this.gap(tab_row_button_gap(cx))
+                        .h(Tab::container_height(cx))
+                })
                 .child(
                     h_flex()
                         .justify_between()
                         .child(
-                            h_flex().gap_1().w_full().when_some(
+                            tab_row_button_group(cx).w_full().when_some(
                                 active_session
                                     .as_ref()
                                     .map(|session| session.read(cx).running_state()),
@@ -701,11 +699,10 @@ impl DebugPanel {
                                     this.map(|this| {
                                         if thread_status == ThreadStatus::Running {
                                             this.child(
-                                                IconButton::new(
+                                                tab_row_icon_button(
                                                     "debug-pause",
                                                     IconName::DebugPause,
                                                 )
-                                                .icon_size(IconSize::Small)
                                                 .on_click(window.listener_for(
                                                     running_state,
                                                     |this, _, _window, cx| {
@@ -726,11 +723,10 @@ impl DebugPanel {
                                             )
                                         } else {
                                             this.child(
-                                                IconButton::new(
+                                                tab_row_icon_button(
                                                     "debug-continue",
                                                     IconName::DebugContinue,
                                                 )
-                                                .icon_size(IconSize::Small)
                                                 .on_click(window.listener_for(
                                                     running_state,
                                                     |this, _, _window, cx| this.continue_thread(cx),
@@ -751,8 +747,7 @@ impl DebugPanel {
                                         }
                                     })
                                     .child(
-                                        IconButton::new("step-over", IconName::DebugStepOver)
-                                            .icon_size(IconSize::Small)
+                                        tab_row_icon_button("step-over", IconName::DebugStepOver)
                                             .on_click(window.listener_for(
                                                 running_state,
                                                 |this, _, _window, cx| {
@@ -773,8 +768,7 @@ impl DebugPanel {
                                             }),
                                     )
                                     .child(
-                                        IconButton::new("step-into", IconName::DebugStepInto)
-                                            .icon_size(IconSize::Small)
+                                        tab_row_icon_button("step-into", IconName::DebugStepInto)
                                             .on_click(window.listener_for(
                                                 running_state,
                                                 |this, _, _window, cx| {
@@ -795,8 +789,7 @@ impl DebugPanel {
                                             }),
                                     )
                                     .child(
-                                        IconButton::new("step-out", IconName::DebugStepOut)
-                                            .icon_size(IconSize::Small)
+                                        tab_row_icon_button("step-out", IconName::DebugStepOut)
                                             .on_click(window.listener_for(
                                                 running_state,
                                                 |this, _, _window, cx| {
@@ -817,8 +810,7 @@ impl DebugPanel {
                                             }),
                                     )
                                     .child(
-                                        IconButton::new("debug-restart", IconName::RotateCcw)
-                                            .icon_size(IconSize::Small)
+                                        tab_row_icon_button("debug-restart", IconName::RotateCcw)
                                             .on_click(window.listener_for(
                                                 running_state,
                                                 |this, _, window, cx| {
@@ -838,8 +830,7 @@ impl DebugPanel {
                                             }),
                                     )
                                     .child(
-                                        IconButton::new("debug-stop", IconName::Power)
-                                            .icon_size(IconSize::Small)
+                                        tab_row_icon_button("debug-stop", IconName::Power)
                                             .on_click(window.listener_for(
                                                 running_state,
                                                 |this, _, _window, cx| {
@@ -883,7 +874,7 @@ impl DebugPanel {
                                     )
                                     .when(supports_detach, |div| {
                                         div.child(
-                                            IconButton::new(
+                                            tab_row_icon_button(
                                                 "debug-disconnect",
                                                 IconName::DebugDetach,
                                             )
@@ -891,7 +882,6 @@ impl DebugPanel {
                                                 thread_status != ThreadStatus::Stopped
                                                     && thread_status != ThreadStatus::Running,
                                             )
-                                            .icon_size(IconSize::Small)
                                             .on_click(window.listener_for(
                                                 running_state,
                                                 |this, _, _, cx| {

@@ -9,7 +9,7 @@ use cef::{
 use gpui::{Hsla, Rgba};
 use serde::Deserialize;
 
-use crate::text_input::send_text_input_state;
+use crate::text_input::{install_text_input_debug_bridge, send_text_input_state};
 
 pub(crate) const PAGE_CHROME_MESSAGE_NAME: &str = "glass.page_chrome";
 const PAGE_CHROME_BRIDGE_NAME: &str = "__glassReportChromeColor";
@@ -455,6 +455,8 @@ wrap_render_process_handler! {
                     );
                 }
             }
+
+            install_text_input_debug_bridge(frame, context);
         }
 
         fn on_focused_node_changed(
