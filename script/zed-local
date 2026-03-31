@@ -170,8 +170,13 @@ if (isReleaseMode) {
   zedBinary = "target/release/zed";
 }
 
+const buildCommand =
+  process.env.GLASS_GPUI_PATH || process.env.GLASS_USE_LOCAL_GPUI === "1"
+    ? `${__dirname}/cargo-gpui-local`
+    : "cargo";
+
 try {
-  execFileSync("cargo", buildArgs, {
+  execFileSync(buildCommand, buildArgs, {
     stdio: "inherit",
   });
 } catch (e) {

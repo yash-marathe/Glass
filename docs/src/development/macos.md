@@ -52,6 +52,13 @@ For a release build:
 cargo run --release
 ```
 
+If you are co-developing against a local GPUI checkout, keep production builds unchanged and opt into the override explicitly:
+
+```sh
+script/cargo-gpui-local run
+script/cargo-gpui-local run --release
+```
+
 And to run the tests:
 
 ```sh

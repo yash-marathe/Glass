@@ -20,6 +20,21 @@ For developers, everything is connected. Deep integration between coding, execut
 
 Zed's UI framework, [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), lives in the same repository as Zed. We separated it into its own standalone repository at **[Glass-HQ/gpui](https://github.com/Glass-HQ/gpui)** and extended it with native iOS and macOS components, making it a framework that multiple apps can build on. We are also bringing iOS support to GPUI so that apps built with it can run everywhere.
 
+### Local GPUI Development
+
+Production builds, CI, and releases use the pinned `Glass-HQ/gpui` revision from [`Cargo.toml`](./Cargo.toml). They do not depend on a sibling checkout.
+
+If you are changing Glass and GPUI together, use [`script/cargo-gpui-local`](./script/cargo-gpui-local) to opt into a local override:
+
+```sh
+script/cargo-gpui-local build -p zed
+script/cargo-gpui-local test -p gpui_examples
+```
+
+The script uses `GLASS_GPUI_PATH` when it is set, and otherwise defaults to `../gpui`.
+
+To launch Glass itself against a local GPUI checkout, set `GLASS_USE_LOCAL_GPUI=1` or `GLASS_GPUI_PATH` before running [`script/zed-local`](./script/zed-local).
+
 ---
 
 ### Building Glass
