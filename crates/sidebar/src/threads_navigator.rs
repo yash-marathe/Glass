@@ -1412,9 +1412,6 @@ impl ThreadsNavigator {
         // is_selected means the keyboard selector is here.
         let is_selected = is_focused && self.selection == Some(ix);
 
-        let is_group_header_after_first =
-            ix > 0 && matches!(entry, ListEntry::ProjectHeader { .. });
-
         let rendered = match entry {
             ListEntry::ProjectHeader {
                 path_list,
@@ -1451,16 +1448,48 @@ impl ThreadsNavigator {
             }
         };
 
-        if is_group_header_after_first {
-            v_flex()
-                .w_full()
-                .border_t_1()
-                .border_color(cx.theme().colors().border.opacity(0.5))
-                .child(rendered)
-                .into_any_element()
-        } else {
-            rendered
-        }
+        self.wrap_project_section_entry(
+            ix,
+            matches!(entry, ListEntry::ProjectHeader { .. }),
+            rendered,
+            cx,
+        )
+    }
+
+    fn is_last_entry_in_group(&self, ix: usize) -> bool {
+        matches!(
+            self.contents.entries.get(ix + 1),
+            None | Some(ListEntry::ProjectHeader { .. })
+        )
+    }
+
+    fn wrap_project_section_entry(
+        &self,
+        ix: usize,
+        is_header: bool,
+        entry: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let is_last = self.is_last_entry_in_group(ix);
+        let section_radius = cx.theme().component_radius().panel.unwrap_or(px(10.0));
+
+        div()
+            .w_full()
+            .px_1p5()
+            .when(is_header && ix > 0, |this| this.pt_1())
+            .child(
+                div()
+                    .w_full()
+                    .border_l_1()
+                    .border_r_1()
+                    .border_color(cx.theme().colors().border_variant)
+                    .when(is_header, |this| this.border_t_1())
+                    .when(is_header, |this| this.rounded_t(section_radius).pt_1())
+                    .when(!is_header, |this| this.pt_0p5())
+                    .when(is_last, |this| this.rounded_b(section_radius).border_b_1().pb_1())
+                    .child(div().px_1().child(entry)),
+            )
+            .into_any_element()
     }
 
     fn render_project_header(
@@ -1501,21 +1530,21 @@ impl ThreadsNavigator {
         let path_list_for_toggle = path_list.clone();
         let path_list_for_collapse = path_list.clone();
         let view_more_expanded = self.expanded_groups.contains_key(path_list);
-
+        let color = cx.theme().colors();
+        let row_radius = cx.theme().component_radius().tab.unwrap_or(px(8.0));
+        let selected_background = color.text.opacity(0.14);
+        let hover_background = color.text.opacity(0.09);
         let label = if highlight_positions.is_empty() {
             Label::new(label.clone())
-                .color(Color::Muted)
+                .line_height_style(LineHeightStyle::UiLabel)
+                .color(Color::Default)
                 .into_any_element()
         } else {
             HighlightedLabel::new(label.clone(), highlight_positions.to_vec())
-                .color(Color::Muted)
+                .line_height_style(LineHeightStyle::UiLabel)
+                .color(Color::Default)
                 .into_any_element()
         };
-
-        let color = cx.theme().colors();
-        let hover_color = color
-            .element_active
-            .blend(color.element_background.opacity(0.2));
 
         h_flex()
             .id(id)
@@ -1524,7 +1553,9 @@ impl ThreadsNavigator {
             .w_full()
             .pl_1p5()
             .pr_1()
+            .rounded(row_radius)
             .border_1()
+            .when(is_active, |this| this.bg(selected_background))
             .map(|this| {
                 if is_selected {
                     this.border_color(color.border_focused)
@@ -1533,7 +1564,7 @@ impl ThreadsNavigator {
                 }
             })
             .justify_between()
-            .hover(|s| s.bg(hover_color))
+            .when(!is_active, |this| this.hover(move |s| s.bg(hover_background)))
             .child(
                 h_flex()
                     .relative()
@@ -2668,7 +2699,7 @@ impl ThreadsNavigator {
                 }
                 cx.notify();
             }))
-            .when(is_hovered && is_running, |this| {
+            .when(is_running, |this| {
                 this.action_slot(
                     IconButton::new("stop-thread", IconName::Stop)
                         .icon_size(IconSize::Small)
@@ -2683,7 +2714,7 @@ impl ThreadsNavigator {
                         }),
                 )
             })
-            .when(is_hovered && !is_running, |this| {
+            .when(!is_running, |this| {
                 this.action_slot(
                     IconButton::new("archive-thread", IconName::Archive)
                         .icon_size(IconSize::Small)
@@ -2737,6 +2768,7 @@ impl ThreadsNavigator {
     }
 
     fn render_filter_input(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = cx.theme().colors();
         div()
             .min_w_0()
             .flex_1()
@@ -2745,7 +2777,27 @@ impl ThreadsNavigator {
                     this.editor_confirm(window, cx);
                 }),
             )
-            .child(self.filter_editor.clone())
+            .child(
+                h_flex()
+                    .min_w_0()
+                    .w_full()
+                    .px_1p5()
+                    .py_0p5()
+                    .gap_1()
+                    .items_center()
+                    .rounded(px(999.0))
+                    .bg(colors
+                        .element_background
+                        .blend(colors.panel_background.opacity(0.35)))
+                    .border_1()
+                    .border_color(colors.border_variant.opacity(0.6))
+                    .child(
+                        Icon::new(IconName::MagnifyingGlass)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(div().min_w_0().flex_1().child(self.filter_editor.clone())),
+            )
     }
 
     fn render_recent_projects_button(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -3036,15 +3088,7 @@ impl ThreadsNavigator {
             .pr_1p5()
             .gap_1()
             .when(!no_open_projects, |this| {
-                this.child(
-                    div().ml_1().child(
-                        Icon::new(IconName::MagnifyingGlass)
-                            .size(IconSize::Small)
-                            .color(Color::Muted),
-                    ),
-                )
-                .child(self.render_filter_input(cx))
-                .child(
+                this.child(self.render_filter_input(cx)).child(
                     h_flex()
                         .gap_1()
                         .when(

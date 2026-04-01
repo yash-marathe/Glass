@@ -1,5 +1,5 @@
 use crate::{
-    CommonAnimationExt, DecoratedIcon, DiffStat, GradientFade, HighlightedLabel, IconDecoration,
+    CommonAnimationExt, DecoratedIcon, DiffStat, HighlightedLabel, IconDecoration,
     IconDecorationKind, Tooltip, prelude::*,
 };
 
@@ -193,29 +193,18 @@ impl ThreadItem {
 impl RenderOnce for ThreadItem {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let color = cx.theme().colors();
+        let row_radius = cx.theme().component_radius().tab.unwrap_or(px(8.0));
         let base_bg = color
             .title_bar_background
             .blend(color.panel_background.opacity(0.2));
-
-        let base_bg = if self.selected {
-            color.element_active
-        } else {
-            base_bg
-        };
-
-        let hover_color = color
-            .element_active
-            .blend(color.element_background.opacity(0.2));
-
-        let gradient_overlay = GradientFade::new(base_bg, hover_color, hover_color)
-            .width(px(64.0))
-            .right(px(-10.0))
-            .gradient_stop(0.75)
-            .group_name("thread-item");
+        let selected_background = color.text.opacity(0.14);
+        let hover_background = color.text.opacity(0.09);
+        let reserved_action_slot_width = px(20.0);
 
         let dot_separator = || {
             Label::new("•")
-                .size(LabelSize::Small)
+                .size(LabelSize::XSmall)
+                .line_height_style(LineHeightStyle::UiLabel)
                 .color(Color::Muted)
                 .alpha(0.5)
         };
@@ -230,7 +219,13 @@ impl RenderOnce for ThreadItem {
                 .justify_center()
                 .when(!icon_visible, |this| this.invisible())
         };
-        let icon_color = self.icon_color.unwrap_or(Color::Muted);
+        let icon_color = self.icon_color.unwrap_or_else(|| {
+            if self.selected {
+                Color::Default
+            } else {
+                Color::Muted
+            }
+        });
         let agent_icon = if let Some(custom_svg) = self.custom_icon_from_external_svg {
             Icon::from_external_svg(custom_svg)
                 .color(icon_color)
@@ -292,10 +287,14 @@ impl RenderOnce for ThreadItem {
 
         let title = self.title;
         let highlight_positions = self.highlight_positions;
+        let title_label_color = self.title_label_color.unwrap_or(Color::Default);
 
         let title_label = if self.title_generating {
             Label::new(title)
-                .color(Color::Muted)
+                .size(LabelSize::Small)
+                .truncate()
+                .line_height_style(LineHeightStyle::UiLabel)
+                .color(title_label_color)
                 .with_animation(
                     "generating-title",
                     Animation::new(Duration::from_secs(2))
@@ -306,11 +305,17 @@ impl RenderOnce for ThreadItem {
                 .into_any_element()
         } else if highlight_positions.is_empty() {
             Label::new(title)
-                .when_some(self.title_label_color, |label, color| label.color(color))
+                .size(LabelSize::Small)
+                .truncate()
+                .line_height_style(LineHeightStyle::UiLabel)
+                .color(title_label_color)
                 .into_any_element()
         } else {
             HighlightedLabel::new(title, highlight_positions)
-                .when_some(self.title_label_color, |label, color| label.color(color))
+                .size(LabelSize::Small)
+                .truncate()
+                .line_height_style(LineHeightStyle::UiLabel)
+                .color(title_label_color)
                 .into_any_element()
         };
 
@@ -332,17 +337,19 @@ impl RenderOnce for ThreadItem {
             .w_full()
             .py_1()
             .px_1p5()
-            .when(self.selected, |s| s.bg(color.element_active))
+            .rounded(row_radius)
             .border_1()
             .border_color(gpui::transparent_black())
+            .when(self.selected, |s| s.bg(selected_background))
             .when(self.focused, |s| s.border_color(color.border_focused))
-            .hover(|s| s.bg(hover_color))
+            .when(!self.selected, |s| s.hover(move |style| style.bg(hover_background)))
             .on_hover(self.on_hover)
             .child(
                 h_flex()
                     .min_w_0()
                     .w_full()
                     .gap_2()
+                    .items_center()
                     .justify_between()
                     .child(
                         h_flex()
@@ -350,29 +357,26 @@ impl RenderOnce for ThreadItem {
                             .min_w_0()
                             .flex_1()
                             .gap_1p5()
+                            .items_center()
                             .child(icon)
-                            .child(title_label)
+                            .child(div().min_w_0().flex_1().child(title_label))
                             .when_some(self.tooltip, |this, tooltip| this.tooltip(tooltip)),
                     )
-                    .child(gradient_overlay)
                     .when(self.hovered, |this| {
-                        this.when_some(self.action_slot, |this, slot| {
-                            let overlay = GradientFade::new(base_bg, hover_color, hover_color)
-                                .width(px(64.0))
-                                .right(px(6.))
-                                .gradient_stop(0.75)
-                                .group_name("thread-item");
-
-                            this.child(
-                                h_flex()
-                                    .relative()
-                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                        cx.stop_propagation()
-                                    })
-                                    .child(overlay)
-                                    .child(slot),
-                            )
-                        })
+                        this
+                    })
+                    .when_some(self.action_slot, |this, slot| {
+                        this.child(
+                            h_flex()
+                                .flex_none()
+                                .w(reserved_action_slot_width)
+                                .justify_end()
+                                .items_center()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation()
+                                })
+                                .when(self.hovered, |this| this.child(slot)),
+                        )
                     }),
             )
             .when(has_worktree || has_diff_stats || has_timestamp, |this| {
@@ -381,12 +385,14 @@ impl RenderOnce for ThreadItem {
                     let positions = self.worktree_highlight_positions;
                     if positions.is_empty() {
                         Label::new(worktree)
-                            .size(LabelSize::Small)
+                            .size(LabelSize::XSmall)
+                            .line_height_style(LineHeightStyle::UiLabel)
                             .color(Color::Muted)
                             .into_any_element()
                     } else {
                         HighlightedLabel::new(worktree, positions)
-                            .size(LabelSize::Small)
+                            .size(LabelSize::XSmall)
+                            .line_height_style(LineHeightStyle::UiLabel)
                             .color(Color::Muted)
                             .into_any_element()
                     }
@@ -424,6 +430,7 @@ impl RenderOnce for ThreadItem {
                         .when(has_diff_stats, |this| {
                             this.child(
                                 DiffStat::new(diff_stat_id, added_count, removed_count)
+                                    .label_size(LabelSize::XSmall)
                                     .tooltip("Unreviewed changes"),
                             )
                         })
@@ -433,7 +440,8 @@ impl RenderOnce for ThreadItem {
                         .when(has_timestamp, |this| {
                             this.child(
                                 Label::new(timestamp.clone())
-                                    .size(LabelSize::Small)
+                                    .size(LabelSize::XSmall)
+                                    .line_height_style(LineHeightStyle::UiLabel)
                                     .color(Color::Muted),
                             )
                         }),
