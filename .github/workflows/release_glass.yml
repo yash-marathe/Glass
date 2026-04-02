@@ -52,9 +52,20 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # sccache provides remote compilation caching via Cloudflare R2.
-      # This is the single biggest build speedup: unchanged crates are
-      # fetched from the cache instead of recompiled from scratch.
+      # Cache cargo registry AND target/ directory. sccache handles remote
+      # compilation caching, but target/ caching preserves proc-macros,
+      # fingerprints, and linker artifacts that sccache can't cache.
+      # This lets cargo skip unchanged crates entirely (~40+ min saved).
+      - name: Cache Rust dependencies and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+          # Only cache dependency artifacts, not workspace crates (which change each release)
+          cache-targets: true
+          cache-all-crates: true
+
+      # rust-cache restores target/, so set up sccache afterwards to avoid
+      # leaving RUSTC_WRAPPER pointing at a binary that no longer exists.
       - name: Cache sccache binary
         id: cache-sccache
         uses: actions/cache@v4
@@ -69,18 +80,6 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           SCCACHE_BUCKET: sccache-glass
-
-      # Cache cargo registry AND target/ directory. sccache handles remote
-      # compilation caching, but target/ caching preserves proc-macros,
-      # fingerprints, and linker artifacts that sccache can't cache.
-      # This lets cargo skip unchanged crates entirely (~40+ min saved).
-      - name: Cache Rust dependencies and target
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-${{ matrix.target }}
-          # Only cache dependency artifacts, not workspace crates (which change each release)
-          cache-targets: true
-          cache-all-crates: true
 
       # Cache cargo-about to avoid rebuilding from source every time.
       - name: Cache cargo tools
