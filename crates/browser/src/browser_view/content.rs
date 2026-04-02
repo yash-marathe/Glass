@@ -322,7 +322,11 @@ impl BrowserView {
         Some(overlay.into_any_element())
     }
 
-    pub(super) fn render_browser_content(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_browser_content(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let find_overlay = self.render_find_overlay(cx);
         let download_center_overlay = self.render_download_center_overlay(cx);
         let theme = cx.theme();
@@ -334,6 +338,7 @@ impl BrowserView {
 
         if is_new_tab_page {
             let browser_view = cx.entity();
+            let search_editor = self.new_tab_search_editor_entity(window, cx);
             return div()
                 .id("browser-content")
                 .relative()
@@ -341,8 +346,12 @@ impl BrowserView {
                 .w_full()
                 .child(new_tab_page::render_new_tab_page(
                     browser_view,
+                    search_editor,
                     self.new_tab_search_text().to_string(),
+                    self.new_tab_suggestions.clone(),
+                    self.new_tab_selected_index,
                     self.is_incognito_window,
+                    window,
                     cx,
                 ))
                 .when_some(find_overlay, |this, overlay| this.child(overlay))

@@ -342,7 +342,9 @@ impl RenderOnce for ThreadItem {
             .border_color(gpui::transparent_black())
             .when(self.selected, |s| s.bg(selected_background))
             .when(self.focused, |s| s.border_color(color.border_focused))
-            .when(!self.selected, |s| s.hover(move |style| style.bg(hover_background)))
+            .when(!self.selected, |s| {
+                s.hover(move |style| style.bg(hover_background))
+            })
             .on_hover(self.on_hover)
             .child(
                 h_flex()
@@ -362,9 +364,7 @@ impl RenderOnce for ThreadItem {
                             .child(div().min_w_0().flex_1().child(title_label))
                             .when_some(self.tooltip, |this, tooltip| this.tooltip(tooltip)),
                     )
-                    .when(self.hovered, |this| {
-                        this
-                    })
+                    .when(self.hovered, |this| this)
                     .when_some(self.action_slot, |this, slot| {
                         this.child(
                             h_flex()
@@ -372,9 +372,7 @@ impl RenderOnce for ThreadItem {
                                 .w(reserved_action_slot_width)
                                 .justify_end()
                                 .items_center()
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                    cx.stop_propagation()
-                                })
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                                 .when(self.hovered, |this| this.child(slot)),
                         )
                     }),

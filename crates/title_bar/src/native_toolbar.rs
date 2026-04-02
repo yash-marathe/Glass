@@ -171,11 +171,15 @@ impl TitleBar {
         toolbar = toolbar.item(NativeToolbarItem::FlexibleSpace);
 
         if is_browser_surface_active {
+            if !is_new_tab_page {
+                toolbar = toolbar
+                    .item(self.build_back_item())
+                    .item(self.build_forward_item())
+                    .item(self.build_reload_item())
+                    .item(self.build_omnibox_item());
+            }
+
             toolbar = toolbar
-                .item(self.build_back_item())
-                .item(self.build_forward_item())
-                .item(self.build_reload_item())
-                .item(self.build_omnibox_item())
                 .item(NativeToolbarItem::FlexibleSpace)
                 .item(self.build_downloads_item());
         }

@@ -239,8 +239,9 @@ impl Render for BrowserToolbar {
             .tab
             .as_ref()
             .is_some_and(|tab| tab.read(cx).is_loading());
-        let shows_downloads_button = self.style == BrowserToolbarStyle::Pane;
-        let show_navigation = self.style == BrowserToolbarStyle::Pane || !is_new_tab_page;
+        let show_navigation_buttons = !is_new_tab_page;
+        let show_omnibox = !is_new_tab_page;
+        let show_downloads_button = true;
 
         h_flex()
             .w_full()
@@ -254,7 +255,7 @@ impl Render for BrowserToolbar {
             .items_center()
             .gap_1()
             .key_context("BrowserToolbar")
-            .when(show_navigation, |this| {
+            .when(show_navigation_buttons, |this| {
                 this.child(
                     native_icon_button("back", "chevron.left")
                         .disabled(!can_go_back)
@@ -276,14 +277,14 @@ impl Render for BrowserToolbar {
                         .on_click(cx.listener(Self::reload))
                         .tooltip("Reload")
                 })
-                .child(self.omnibox.clone())
-                .when(shows_downloads_button, |this| {
-                    this.child(
-                        native_icon_button("downloads", "arrow.down.circle")
-                            .on_click(cx.listener(Self::toggle_download_center))
-                            .tooltip("Downloads"),
-                    )
-                })
+            })
+            .when(show_omnibox, |this| this.child(self.omnibox.clone()))
+            .when(show_downloads_button, |this| {
+                this.child(
+                    native_icon_button("downloads", "arrow.down.circle")
+                        .on_click(cx.listener(Self::toggle_download_center))
+                        .tooltip("Downloads"),
+                )
             })
     }
 }

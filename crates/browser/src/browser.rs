@@ -145,6 +145,29 @@ fn attach_browser_toolbar_to_pane(
     });
 }
 
+fn attach_browser_toolbars_to_workspace(
+    workspace: &workspace::Workspace,
+    window: &mut Window,
+    cx: &mut gpui::Context<workspace::Workspace>,
+) {
+    let mut panes: Vec<Entity<workspace::Pane>> = workspace.panes().iter().cloned().collect();
+
+    if let Some(manager) = workspace.terminal_session_manager() {
+        for pane in manager.read(cx).navigation_panes() {
+            if panes
+                .iter()
+                .all(|existing| existing.entity_id() != pane.entity_id())
+            {
+                panes.push(pane);
+            }
+        }
+    }
+
+    for pane in panes {
+        attach_browser_toolbar_to_pane(workspace, &pane, window, cx);
+    }
+}
+
 pub fn init(cx: &mut App) {
     match CefInstance::initialize(cx) {
         Ok(_) => {
@@ -195,15 +218,23 @@ pub fn init(cx: &mut App) {
                 return;
             };
 
-            for pane in workspace.panes() {
-                attach_browser_toolbar_to_pane(workspace, pane, window, cx);
-            }
+            attach_browser_toolbars_to_workspace(workspace, window, cx);
 
             let workspace_handle = cx.entity();
             cx.subscribe_in(&workspace_handle, window, {
                 move |workspace, _, event, window, cx| {
-                    if let workspace::Event::PaneAdded(pane) = event {
-                        attach_browser_toolbar_to_pane(workspace, pane, window, cx);
+                    match event {
+                        workspace::Event::PaneAdded(pane) => {
+                            attach_browser_toolbar_to_pane(workspace, pane, window, cx);
+                        }
+                        workspace::Event::ItemAdded { item } => {
+                            if item.workspace_item_kind(cx)
+                                == Some(workspace::WorkspaceItemKind::Browser)
+                            {
+                                attach_browser_toolbars_to_workspace(workspace, window, cx);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             })

@@ -14,6 +14,7 @@ pub struct HistoryEntry {
     pub last_visited_ms: u64,
 }
 
+#[derive(Clone)]
 pub struct HistoryMatch {
     pub url: String,
     pub title: String,

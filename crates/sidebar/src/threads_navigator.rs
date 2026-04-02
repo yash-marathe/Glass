@@ -1486,7 +1486,9 @@ impl ThreadsNavigator {
                     .when(is_header, |this| this.border_t_1())
                     .when(is_header, |this| this.rounded_t(section_radius).pt_1())
                     .when(!is_header, |this| this.pt_0p5())
-                    .when(is_last, |this| this.rounded_b(section_radius).border_b_1().pb_1())
+                    .when(is_last, |this| {
+                        this.rounded_b(section_radius).border_b_1().pb_1()
+                    })
                     .child(div().px_1().child(entry)),
             )
             .into_any_element()
@@ -1564,7 +1566,9 @@ impl ThreadsNavigator {
                 }
             })
             .justify_between()
-            .when(!is_active, |this| this.hover(move |s| s.bg(hover_background)))
+            .when(!is_active, |this| {
+                this.hover(move |s| s.bg(hover_background))
+            })
             .child(
                 h_flex()
                     .relative()

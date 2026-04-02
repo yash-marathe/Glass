@@ -561,7 +561,9 @@ impl ThreadsArchiveView {
                             this.border_color(gpui::transparent_black())
                         }
                     })
-                    .when(!is_focused, |this| this.hover(move |style| style.bg(hover_background)))
+                    .when(!is_focused, |this| {
+                        this.hover(move |style| style.bg(hover_background))
+                    })
                     .child(
                         v_flex()
                             .min_w_0()
@@ -626,15 +628,13 @@ impl ThreadsArchiveView {
                                                             )
                                                         }
                                                     })
-                                                    .on_click(cx.listener(
-                                                        move |this, _, _, cx| {
-                                                            this.delete_thread(
-                                                                &session_id_for_delete,
-                                                                cx,
-                                                            );
-                                                            cx.stop_propagation();
-                                                        },
-                                                    )),
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.delete_thread(
+                                                            &session_id_for_delete,
+                                                            cx,
+                                                        );
+                                                        cx.stop_propagation();
+                                                    })),
                                                 )
                                             }),
                                     ),

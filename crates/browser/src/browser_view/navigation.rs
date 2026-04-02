@@ -15,10 +15,7 @@ impl BrowserView {
             .unwrap_or(false);
 
         if is_new_tab {
-            window.focus_native_search_field(
-                NativeSearchFieldTarget::ContentElement("new-tab-search".into()),
-                true,
-            );
+            self.focus_new_tab_search(window, cx);
             cx.stop_propagation();
             return;
         }

@@ -56,7 +56,9 @@ impl BrowserView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.find_editor_is_focused(window, cx) {
+        if self.find_editor_is_focused(window, cx)
+            || self.new_tab_search_editor_is_focused(window, cx)
+        {
             return;
         }
 
@@ -89,7 +91,9 @@ impl BrowserView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.find_editor_is_focused(window, cx) {
+        if self.find_editor_is_focused(window, cx)
+            || self.new_tab_search_editor_is_focused(window, cx)
+        {
             return;
         }
 

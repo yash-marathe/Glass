@@ -23,14 +23,12 @@ use crate::tab::{BrowserTab, TabEvent};
 use crate::text_input::BrowserTextInputState;
 #[cfg(not(target_os = "macos"))]
 use crate::toolbar::{BrowserToolbar, BrowserToolbarStyle};
-use editor::Editor;
+use editor::{Editor, actions::SelectAll as EditorSelectAll};
 use gpui::px;
 use gpui::{
     App, Bounds, Context, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, NativePopoverClickableRow, NativePopoverContentItem,
-    NativeSearchFieldTarget, NativeSearchSuggestionMenu, ParentElement, Pixels, Render,
-    SharedString, Styled, Subscription, Task, UTF16Selection, WeakEntity, Window, actions, div,
-    point, prelude::*, size,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Render, SharedString, Styled,
+    Subscription, Task, UTF16Selection, WeakEntity, Window, actions, div, point, prelude::*, size,
 };
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -184,6 +182,8 @@ pub struct BrowserView {
     new_tab_search_text: String,
     new_tab_suggestions: Vec<crate::history::HistoryMatch>,
     new_tab_selected_index: Option<usize>,
+    new_tab_search_editor: Option<Entity<Editor>>,
+    suppress_new_tab_search_editor_event: bool,
     pending_new_tab_focus: bool,
     context_menu: Option<BrowserContextMenu>,
     pending_context_menu: Option<PendingContextMenu>,
@@ -278,6 +278,8 @@ impl BrowserView {
             new_tab_search_text: String::new(),
             new_tab_suggestions: Vec::new(),
             new_tab_selected_index: None,
+            new_tab_search_editor: None,
+            suppress_new_tab_search_editor_event: false,
             pending_new_tab_focus: false,
             context_menu: None,
             pending_context_menu: None,
@@ -494,6 +496,77 @@ impl BrowserView {
         &self.new_tab_search_text
     }
 
+    // Failure modes:
+    // - The new tab editor is first needed during a focus request before it has rendered.
+    // - Blur can fire while the user clicks a suggestion row.
+    // - Async history search results can arrive after the query has already changed.
+    fn ensure_new_tab_search_editor(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<Editor> {
+        if let Some(editor) = self.new_tab_search_editor.clone() {
+            return editor;
+        }
+
+        let editor = cx.new(|cx| {
+            let mut editor = Editor::single_line(window, cx);
+            editor.set_placeholder_text("Search or enter URL", window, cx);
+            editor
+        });
+        let editor_subscription = cx.subscribe(&editor, Self::handle_new_tab_search_editor_event);
+        self._subscriptions.push(editor_subscription);
+        self.new_tab_search_editor = Some(editor.clone());
+        editor
+    }
+
+    fn handle_new_tab_search_editor_event(
+        &mut self,
+        editor: Entity<Editor>,
+        event: &editor::EditorEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if self.suppress_new_tab_search_editor_event
+            || !matches!(event, editor::EditorEvent::BufferEdited)
+        {
+            return;
+        }
+
+        self.set_new_tab_search_text(editor.read(cx).text(cx), cx);
+    }
+
+    pub(crate) fn new_tab_search_editor_entity(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<Editor> {
+        self.ensure_new_tab_search_editor(window, cx)
+    }
+
+    fn new_tab_search_editor_is_focused(&self, window: &Window, cx: &App) -> bool {
+        self.new_tab_search_editor
+            .as_ref()
+            .is_some_and(|editor| editor.focus_handle(cx).contains_focused(window, cx))
+    }
+
+    pub(crate) fn focus_new_tab_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = self.ensure_new_tab_search_editor(window, cx);
+        window.focus(&editor.focus_handle(cx), cx);
+        editor.update(cx, |editor, cx| {
+            editor.select_all(&EditorSelectAll, window, cx);
+        });
+    }
+
+    fn defer_focus_new_tab_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = self.ensure_new_tab_search_editor(window, cx);
+        cx.defer_in(window, move |_this, window, cx| {
+            window.focus(&editor.focus_handle(cx), cx);
+            editor.update(cx, |editor, cx| {
+                editor.select_all(&EditorSelectAll, window, cx);
+            });
+        });
+    }
+
     pub(crate) fn set_new_tab_search_text(&mut self, text: String, cx: &mut Context<Self>) {
         if self.new_tab_search_text == text {
             return;
@@ -518,7 +591,45 @@ impl BrowserView {
         count
     }
 
-    pub(crate) fn submit_new_tab_search(&mut self, text: &str, cx: &mut Context<Self>) {
+    fn clear_new_tab_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_tab_search_text.clear();
+        self.new_tab_suggestions.clear();
+        self.new_tab_selected_index = None;
+
+        if let Some(editor) = self.new_tab_search_editor.clone() {
+            self.suppress_new_tab_search_editor_event = true;
+            editor.update(cx, |editor, cx| {
+                editor.set_text(String::new(), window, cx);
+            });
+            self.suppress_new_tab_search_editor_event = false;
+        }
+    }
+
+    fn navigate_new_tab_search_result(
+        &mut self,
+        url: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.clear_new_tab_search(window, cx);
+
+        if let Some(tab) = self.active_tab().cloned() {
+            tab.update(cx, |tab, cx| {
+                tab.navigate(&url, cx);
+                tab.set_focus(true);
+            });
+        }
+
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn submit_new_tab_search(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let url = if let Some(index) = self.new_tab_selected_index {
             self.url_for_new_tab_row(index)
                 .unwrap_or_else(|| text_to_url(text.trim()))
@@ -530,17 +641,20 @@ impl BrowserView {
             text_to_url(query)
         };
 
-        self.new_tab_search_text.clear();
-        self.new_tab_suggestions.clear();
-        self.new_tab_selected_index = None;
+        self.navigate_new_tab_search_result(url, window, cx);
+    }
 
-        if let Some(tab) = self.active_tab().cloned() {
-            tab.update(cx, |tab, cx| {
-                tab.navigate(&url, cx);
-                tab.set_focus(true);
-            });
-        }
-        cx.notify();
+    pub(crate) fn activate_new_tab_row(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(url) = self.url_for_new_tab_row(index) else {
+            return;
+        };
+
+        self.navigate_new_tab_search_result(url, window, cx);
     }
 
     pub(crate) fn new_tab_move_up(&mut self, cx: &mut Context<Self>) {
@@ -567,30 +681,10 @@ impl BrowserView {
         cx.notify();
     }
 
-    pub(crate) fn new_tab_cancel(&mut self, _cx: &mut Context<Self>) {
+    pub(crate) fn new_tab_cancel(&mut self, cx: &mut Context<Self>) {
         self.new_tab_suggestions.clear();
         self.new_tab_selected_index = None;
-    }
-
-    pub(crate) fn new_tab_blur(&mut self, _cx: &mut Context<Self>) {
-        self.new_tab_suggestions.clear();
-        self.new_tab_selected_index = None;
-    }
-
-    fn url_for_new_tab_row(&self, index: usize) -> Option<String> {
-        let mut current = 0;
-
-        if !self.new_tab_search_text.is_empty() {
-            if current == index {
-                return Some(text_to_url(&self.new_tab_search_text));
-            }
-            current += 1;
-        }
-
-        let suggestion_index = index - current;
-        self.new_tab_suggestions
-            .get(suggestion_index)
-            .map(|s| s.url.clone())
+        cx.notify();
     }
 
     fn search_new_tab_history(&mut self, query: String, cx: &mut Context<Self>) {
@@ -612,110 +706,20 @@ impl BrowserView {
         .detach();
     }
 
-    fn show_new_tab_search_suggestion_menu(
-        &self,
-        browser_view_weak: gpui::WeakEntity<Self>,
-        window: &mut Window,
-    ) {
-        if self.new_tab_row_count() == 0 {
-            window.dismiss_native_search_suggestion_menu();
-            return;
-        }
+    fn url_for_new_tab_row(&self, index: usize) -> Option<String> {
+        let mut current = 0;
 
-        let selected = self.new_tab_selected_index;
-        let mut items: Vec<NativePopoverContentItem> = Vec::new();
-        let mut row_count = 0usize;
-        let mut row_index = 0usize;
-        let has_search_row = !self.new_tab_search_text.is_empty();
-
-        if has_search_row {
-            let query = self.new_tab_search_text.clone();
-            let bv = browser_view_weak.clone();
-            items.push(
-                NativePopoverClickableRow::new(format!("Search \"{}\"", query))
-                    .icon("magnifyingglass")
-                    .detail("Google")
-                    .selected(selected == Some(row_index))
-                    .on_click(move |window, cx| {
-                        window.dismiss_native_search_suggestion_menu();
-                        let url = text_to_url(&query);
-                        let _ = bv.update(cx, |bv, cx| {
-                            bv.new_tab_search_text.clear();
-                            bv.new_tab_suggestions.clear();
-                            bv.new_tab_selected_index = None;
-                            if let Some(tab) = bv.active_tab().cloned() {
-                                tab.update(cx, |tab, cx| {
-                                    tab.navigate(&url, cx);
-                                    tab.set_focus(true);
-                                });
-                            }
-                            cx.notify();
-                        });
-                    })
-                    .into(),
-            );
-            row_count += 1;
-            row_index += 1;
-            items.push(NativePopoverContentItem::separator());
-        }
-
-        items.push(NativePopoverContentItem::heading("History"));
-        for suggestion in &self.new_tab_suggestions {
-            let url = suggestion.url.clone();
-            let title = if suggestion.title.is_empty() {
-                suggestion.url.clone()
-            } else {
-                suggestion.title.clone()
-            };
-            let detail = crate::new_tab_page::extract_domain(&suggestion.url);
-            let bv = browser_view_weak.clone();
-            items.push(
-                NativePopoverClickableRow::new(title)
-                    .icon("clock")
-                    .detail(detail)
-                    .selected(selected == Some(row_index))
-                    .on_click(move |window, cx| {
-                        window.dismiss_native_search_suggestion_menu();
-                        let _ = bv.update(cx, |bv, cx| {
-                            bv.new_tab_search_text.clear();
-                            bv.new_tab_suggestions.clear();
-                            bv.new_tab_selected_index = None;
-                            if let Some(tab) = bv.active_tab().cloned() {
-                                tab.update(cx, |tab, cx| {
-                                    tab.navigate(&url, cx);
-                                    tab.set_focus(true);
-                                });
-                            }
-                            cx.notify();
-                        });
-                    })
-                    .into(),
-            );
-            row_count += 1;
-            row_index += 1;
-        }
-
-        let padding = 16.0;
-        let row_height = 28.0;
-        let heading_height = 28.0;
-        let separator_height = 12.0;
-        let content_height = (row_count as f64 * row_height)
-            + heading_height
-            + if has_search_row {
-                separator_height
-            } else {
-                0.0
+        if !self.new_tab_search_text.is_empty() {
+            if current == index {
+                return Some(text_to_url(&self.new_tab_search_text));
             }
-            + padding * 2.0;
-        let panel_height = content_height.min(400.0);
-        let menu = NativeSearchSuggestionMenu::new(500.0, panel_height)
-            .on_close(|_, _, _| {})
-            .items(items);
+            current += 1;
+        }
 
-        window.update_native_search_suggestion_menu(
-            menu,
-            NativeSearchFieldTarget::ContentElement("new-tab-search".into()),
-        );
+        let suggestion_index = index - current;
+        self.new_tab_suggestions
+            .get(suggestion_index)
+            .map(|suggestion| suggestion.url.clone())
     }
 
     fn request_context_for_new_tab(&self) -> Option<cef::RequestContext> {
@@ -803,7 +807,7 @@ impl BrowserView {
     }
 
     #[cfg(not(target_os = "macos"))]
-    fn focus_omnibox_if_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn focus_new_tab_search_if_new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let is_new_tab = self
             .active_tab()
             .map(|t| t.read(cx).is_new_tab_page())
@@ -812,10 +816,7 @@ impl BrowserView {
             return;
         }
 
-        window.focus_native_search_field(
-            NativeSearchFieldTarget::ContentElement("new-tab-search".into()),
-            true,
-        );
+        self.focus_new_tab_search(window, cx);
     }
 
     fn request_new_tab_search_focus(&mut self, cx: &mut Context<Self>) {
@@ -1011,7 +1012,7 @@ impl BrowserView {
 
             ModeViewRegistry::global_mut(cx)
                 .set_titlebar_center_view(ModeId::BROWSER, toolbar.into());
-            self.focus_omnibox_if_new_tab(window, cx);
+            self.focus_new_tab_search_if_new_tab(window, cx);
             cx.notify();
         }
     }
@@ -1434,24 +1435,7 @@ impl Render for BrowserView {
 
         if self.pending_new_tab_focus {
             self.pending_new_tab_focus = false;
-            cx.defer_in(window, |_this, window, _cx| {
-                window.focus_native_search_field(
-                    NativeSearchFieldTarget::ContentElement("new-tab-search".into()),
-                    true,
-                );
-            });
-        }
-
-        // Show/update suggestion panel for new tab page search.
-        // The panel is dismissed by on_blur/on_cancel handlers; here we only
-        // rebuild it when there are active suggestions to display.
-        let is_new_tab = self
-            .active_tab()
-            .map(|t| t.read(cx).is_new_tab_page())
-            .unwrap_or(false);
-        if is_new_tab && self.new_tab_row_count() > 0 {
-            let weak = cx.entity().downgrade();
-            self.show_new_tab_search_suggestion_menu(weak, window);
+            self.defer_focus_new_tab_search(window, cx);
         }
 
         let element = div()
@@ -1493,7 +1477,7 @@ impl Render for BrowserView {
         let element = element
             .flex_col()
             .child(self.bookmark_bar.clone())
-            .child(self.render_browser_content(cx))
+            .child(self.render_browser_content(window, cx))
             .into_any_element();
 
         #[cfg(not(target_os = "macos"))]
@@ -1502,7 +1486,7 @@ impl Render for BrowserView {
                 .flex_col()
                 .child(div().mt(px(-1.)).child(self.render_tab_strip(cx)))
                 .child(self.bookmark_bar.clone())
-                .child(self.render_browser_content(cx))
+                .child(self.render_browser_content(window, cx))
                 .into_any_element(),
             TabBarMode::Sidebar => element
                 .flex_row()
@@ -1514,7 +1498,7 @@ impl Render for BrowserView {
                         .flex_col()
                         .overflow_hidden()
                         .child(self.bookmark_bar.clone())
-                        .child(self.render_browser_content(cx)),
+                        .child(self.render_browser_content(window, cx)),
                 )
                 .into_any_element(),
         };
