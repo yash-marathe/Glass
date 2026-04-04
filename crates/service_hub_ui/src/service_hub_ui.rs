@@ -1,16 +1,18 @@
 mod app_store_connect_auth;
-mod app_store_connect_page;
+mod app_store_connect_provider;
 mod command_runner;
+mod services_page;
+mod services_provider;
 
-use app_store_connect_page::AppStoreConnectPage;
 use gpui::{App, actions};
+use services_page::ServicesPage;
 use workspace::Workspace;
 
 actions!(
     service_hub,
     [
-        /// Opens App Store Connect service management for the current workspace.
-        OpenAppStoreConnect
+        /// Opens service management for the current workspace.
+        OpenServices
     ]
 );
 
@@ -23,14 +25,8 @@ pub fn init(cx: &mut App) {
                 return;
             };
 
-            workspace.register_action(move |workspace, _: &OpenAppStoreConnect, window, cx| {
-                if let Some(existing) = workspace.item_of_type::<AppStoreConnectPage>(cx) {
-                    workspace.activate_item(&existing, true, true, window, cx);
-                    return;
-                }
-
-                let page = AppStoreConnectPage::new(workspace, window, cx);
-                workspace.add_item_to_active_pane(Box::new(page), None, true, window, cx);
+            workspace.register_action(move |workspace, _: &OpenServices, window, cx| {
+                ServicesPage::open(workspace, window, cx);
             });
         },
     )

@@ -29,9 +29,29 @@ pub enum ServiceCapability {
 pub struct ServiceProviderDescriptor {
     pub id: String,
     pub label: String,
+    pub shell: ServiceShellDescriptor,
     pub auth_kind: ServiceAuthKind,
     pub auth: Option<ServiceAuthConfiguration>,
     pub capabilities: ServiceCapabilitySet,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceShellDescriptor {
+    pub resource_kind: Option<ServiceResourceKindDescriptor>,
+    pub navigation_items: Vec<ServiceNavigationItemDescriptor>,
+    pub default_navigation_item_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceResourceKindDescriptor {
+    pub singular_label: String,
+    pub plural_label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceNavigationItemDescriptor {
+    pub id: String,
+    pub label: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -221,6 +241,23 @@ impl ServiceProvider for AscServiceProvider {
         ServiceProviderDescriptor {
             id: "app-store-connect".to_string(),
             label: "App Store Connect".to_string(),
+            shell: ServiceShellDescriptor {
+                resource_kind: Some(ServiceResourceKindDescriptor {
+                    singular_label: "App".to_string(),
+                    plural_label: "Apps".to_string(),
+                }),
+                navigation_items: vec![
+                    ServiceNavigationItemDescriptor {
+                        id: "overview".to_string(),
+                        label: "Overview".to_string(),
+                    },
+                    ServiceNavigationItemDescriptor {
+                        id: "builds".to_string(),
+                        label: "Builds".to_string(),
+                    },
+                ],
+                default_navigation_item_id: "overview".to_string(),
+            },
             auth_kind: ServiceAuthKind::ApiKey,
             auth: Some(ServiceAuthConfiguration {
                 kind: ServiceAuthKind::ApiKey,
@@ -748,6 +785,24 @@ mod tests {
             auth.actions
                 .iter()
                 .any(|action| action.action == ServiceAuthAction::Logout)
+        );
+    }
+
+    #[test]
+    fn advertises_shell_metadata_for_app_store_connect() {
+        let descriptor = AscServiceProvider.descriptor();
+        let resource_kind = descriptor.shell.resource_kind.as_ref().unwrap();
+
+        assert_eq!(resource_kind.singular_label, "App");
+        assert_eq!(resource_kind.plural_label, "Apps");
+        assert_eq!(descriptor.shell.default_navigation_item_id, "overview");
+        assert_eq!(descriptor.shell.navigation_items.len(), 2);
+        assert!(
+            descriptor
+                .shell
+                .navigation_items
+                .iter()
+                .any(|item| item.id == "builds")
         );
     }
 
