@@ -120,6 +120,73 @@ jobs:
           echo "CEF extracted to $CEF_PATH"
           ls "$CEF_PATH"
 
+      # ── Patch missing file in Glass-HQ/gpui fork ─────────────────
+      - name: Patch gpui fork (add missing layer_shell.rs)
+        run: |
+          # The Glass-HQ/gpui fork is missing layer_shell.rs which is needed
+          # when the wayland feature is enabled on Linux. We fetch the cargo
+          # git checkout and add the file before building.
+          # First, trigger cargo to fetch the gpui dependency
+          cargo fetch 2>/dev/null || true
+
+          # Find the gpui checkout directory
+          GPUI_DIR=$(find ~/.cargo/git/checkouts -path "*/gpui*/crates/gpui/src/platform" -type d 2>/dev/null | head -1)
+          if [ -n "$GPUI_DIR" ] && [ ! -f "$GPUI_DIR/layer_shell.rs" ]; then
+            echo "Adding missing layer_shell.rs to $GPUI_DIR"
+            cat > "$GPUI_DIR/layer_shell.rs" << 'LAYERSHELL'
+          use bitflags::bitflags;
+          use thiserror::Error;
+
+          use crate::Pixels;
+
+          #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+          pub enum Layer {
+              Background,
+              Bottom,
+              Top,
+              #[default]
+              Overlay,
+          }
+
+          bitflags! {
+              #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+              pub struct Anchor: u32 {
+                  const TOP = 1;
+                  const BOTTOM = 2;
+                  const LEFT = 4;
+                  const RIGHT = 8;
+              }
+          }
+
+          #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+          pub enum KeyboardInteractivity {
+              None,
+              Exclusive,
+              #[default]
+              OnDemand,
+          }
+
+          #[derive(Clone, Debug, Default, PartialEq, Eq)]
+          pub struct LayerShellOptions {
+              pub namespace: String,
+              pub layer: Layer,
+              pub anchor: Anchor,
+              pub exclusive_zone: Option<Pixels>,
+              pub exclusive_edge: Option<Anchor>,
+              pub margin: Option<(Pixels, Pixels, Pixels, Pixels)>,
+              pub keyboard_interactivity: KeyboardInteractivity,
+          }
+
+          #[derive(Debug, Error)]
+          #[error("Compositor doesn't support zwlr_layer_shell_v1")]
+          pub struct LayerShellNotSupportedError;
+          LAYERSHELL
+            sed -i 's/^          //' "$GPUI_DIR/layer_shell.rs"
+            echo "layer_shell.rs patched successfully"
+          else
+            echo "layer_shell.rs already exists or gpui checkout not found"
+          fi
+
       # ── Build ────────────────────────────────────────────────────────
       - name: Build Glass
         run: |
