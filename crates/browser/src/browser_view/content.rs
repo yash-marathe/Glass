@@ -1,8 +1,10 @@
 use gpui::{
     Context, Corner, ElementInputHandler, IntoElement, MouseButton, NativeImageScaling,
     NativeImageSymbolWeight, ObjectFit, ParentElement, Styled, anchored, canvas, deferred, div,
-    native_icon_button, native_image_view, prelude::*, px, surface,
+    native_icon_button, native_image_view, prelude::*, px,
 };
+#[cfg(target_os = "macos")]
+use gpui::surface;
 use ui::prelude::*;
 
 use super::BrowserView;
@@ -359,9 +361,14 @@ impl BrowserView {
                 .into_any_element();
         }
 
-        let current_frame = self.active_tab().and_then(|t| t.read(cx).current_frame());
-
-        let has_frame = current_frame.is_some();
+        #[cfg(target_os = "macos")]
+        let (current_frame, has_frame) = {
+            let frame = self.active_tab().and_then(|t| t.read(cx).current_frame());
+            let has = frame.is_some();
+            (frame, has)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let has_frame = false;
 
         let this = cx.entity();
         let input_target = this.clone();
@@ -476,8 +483,14 @@ impl BrowserView {
             .on_mouse_up(MouseButton::Middle, cx.listener(Self::handle_mouse_up))
             .on_mouse_move(cx.listener(Self::handle_mouse_move))
             .on_scroll_wheel(cx.listener(Self::handle_scroll))
-            .when_some(current_frame, |this, frame| {
-                this.child(surface(frame).size_full().object_fit(ObjectFit::Fill))
+            .when(has_frame, |this| {
+                #[cfg(target_os = "macos")]
+                {
+                    if let Some(frame) = current_frame {
+                        return this.child(surface(frame).size_full().object_fit(ObjectFit::Fill));
+                    }
+                }
+                this
             })
             .when(!has_frame, |this| {
                 this.child(
