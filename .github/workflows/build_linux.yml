@@ -1,17 +1,14 @@
-name: Build Linux
+name: Build & Release Linux
 
 on:
-  pull_request:
-    branches: ["**"]
-  push:
-    branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
-      release:
-        description: "Create a release (attach artifacts to GitHub Release)"
-        type: boolean
-        default: false
+      version:
+        description: "Version tag (e.g. v0.0.17). Leave empty for dev build."
+        required: false
+      attach_to_release:
+        description: "Attach artifacts to an existing GitHub Release with this tag"
+        required: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,92 +17,10 @@ env:
   CC: clang
   CXX: clang++
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  # ---------------------------------------------------------------------------
-  # Lint & clippy (Linux)
-  # ---------------------------------------------------------------------------
-  clippy-linux:
-    name: Clippy (Linux)
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: ./script/linux
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Download WASI SDK
-        run: ./script/download-wasi-sdk
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: clippy-linux
-
-      - name: Run clippy
-        run: ./script/clippy
-
-  # ---------------------------------------------------------------------------
-  # Tests (Linux)
-  # ---------------------------------------------------------------------------
-  test-linux:
-    name: Tests (Linux)
-    runs-on: ubuntu-22.04
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 500ms
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: ./script/linux
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Download WASI SDK
-        run: ./script/download-wasi-sdk
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: test-linux
-
-      - name: Run tests
-        run: cargo nextest run --workspace --no-fail-fast --no-tests=warn
-
-    timeout-minutes: 60
-
-  # ---------------------------------------------------------------------------
-  # Build Linux binary + bundle (x86_64 and aarch64)
-  # ---------------------------------------------------------------------------
   build-linux:
     name: Build Linux (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    needs: [clippy-linux]
     strategy:
       fail-fast: false
       matrix:
@@ -115,7 +30,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             musl_target: x86_64-unknown-linux-musl
             cef_platform: linux64
-          # Uncomment for ARM64 when a runner is available:
+          # Uncomment when an ARM64 runner is available:
           # - arch: aarch64
           #   runner: ubuntu-22.04-arm64
           #   target: aarch64-unknown-linux-gnu
@@ -124,6 +39,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: false
 
       - name: Install system dependencies
         run: ./script/linux
@@ -147,9 +64,7 @@ jobs:
       - name: Generate licenses
         run: ./script/generate-licenses
 
-      # -----------------------------------------------------------------------
-      # Download CEF for Linux
-      # -----------------------------------------------------------------------
+      # ── CEF ──────────────────────────────────────────────────────────
       - name: Cache CEF
         id: cache-cef
         uses: actions/cache@v4
@@ -194,11 +109,8 @@ jobs:
           cd /tmp && tar -xjf cef.tar.bz2
           EXTRACTED_DIR=$(ls -d cef_binary_* | head -1)
 
-          # Copy Release binaries (libcef.so, etc.)
           cp -R "/tmp/$EXTRACTED_DIR/Release/"* "$CEF_PATH/"
-          # Copy Resources (locales, .pak files, etc.)
           cp -R "/tmp/$EXTRACTED_DIR/Resources/"* "$CEF_PATH/"
-          # Copy build headers for cef-dll-sys
           cp -R "/tmp/$EXTRACTED_DIR/include" "$CEF_PATH/" || true
           cp -R "/tmp/$EXTRACTED_DIR/libcef_dll" "$CEF_PATH/" || true
           cp -R "/tmp/$EXTRACTED_DIR/cmake" "$CEF_PATH/" || true
@@ -208,144 +120,318 @@ jobs:
           echo "CEF extracted to $CEF_PATH"
           ls "$CEF_PATH"
 
-      # -----------------------------------------------------------------------
-      # Build
-      # -----------------------------------------------------------------------
+      # ── Build ────────────────────────────────────────────────────────
       - name: Build Glass
-        env:
-          CEF_PATH: ${{ github.workspace }}/../cef-cache
-          ZED_BUNDLE: "true"
-          RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0-dev' }}
         run: |
           export CEF_PATH="$HOME/.local/share/cef"
           export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$CEF_PATH"
+          export ZED_BUNDLE=true
 
-          # Linker flags
+          VERSION="${{ github.event.inputs.version }}"
+          export RELEASE_VERSION="${VERSION:-0.0.0-dev}"
+
           if [ "${{ matrix.arch }}" = "aarch64" ]; then
             export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-fuse-ld=lld -C link-args=-Wl,--disable-new-dtags,-rpath,\$ORIGIN/../lib"
           else
             export RUSTFLAGS="${RUSTFLAGS:-} -C link-args=-Wl,--disable-new-dtags,-rpath,\$ORIGIN/../lib"
           fi
 
-          # Main binaries
           cargo build --release --target ${{ matrix.target }} \
             --package zed --package cli
 
-          # Browser helper
           cargo build --release --target ${{ matrix.target }} \
             --package browser --bin glass_helper
 
-          # Remote server (musl for static linking)
+          # Remote server (musl, statically linked)
           RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+crt-static" \
             cargo build --release --target ${{ matrix.musl_target }} \
             --package remote_server
 
-      # -----------------------------------------------------------------------
-      # Bundle
-      # -----------------------------------------------------------------------
-      - name: Create Linux bundle
+      # ── Strip ────────────────────────────────────────────────────────
+      - name: Strip binaries
+        run: |
+          target_dir="${CARGO_TARGET_DIR:-target}"
+          for bin in zed cli glass_helper; do
+            llvm-objcopy --strip-debug "${target_dir}/${{ matrix.target }}/release/${bin}" 2>/dev/null || \
+              strip --strip-debug "${target_dir}/${{ matrix.target }}/release/${bin}" || true
+          done
+          llvm-objcopy --strip-debug "${target_dir}/${{ matrix.musl_target }}/release/remote_server" 2>/dev/null || \
+            strip --strip-debug "${target_dir}/${{ matrix.musl_target }}/release/remote_server" || true
+
+      # ── Package: .deb ────────────────────────────────────────────────
+      - name: Build .deb package
         run: |
           export CEF_PATH="$HOME/.local/share/cef"
           target_dir="${CARGO_TARGET_DIR:-target}"
           arch="${{ matrix.arch }}"
-          channel=$(<crates/zed/RELEASE_CHANNEL)
+          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${VERSION:-0.0.0-dev}"
+          VERSION="${VERSION#v}"  # strip leading v
 
-          suffix=""
-          if [ "$channel" != "stable" ]; then
-            suffix="-$channel"
+          if [ "$arch" = "x86_64" ]; then
+            DEB_ARCH="amd64"
+          else
+            DEB_ARCH="arm64"
           fi
 
-          temp_dir=$(mktemp -d)
-          app_dir="${temp_dir}/glass${suffix}.app"
+          PKG_ROOT=$(mktemp -d)
+          PKG_NAME="glass_${VERSION}_${DEB_ARCH}"
 
-          # --- Binaries ---
-          mkdir -p "${app_dir}/bin" "${app_dir}/libexec"
-          cp "${target_dir}/${{ matrix.target }}/release/zed" "${app_dir}/libexec/glass-editor"
+          # ── DEBIAN control ──
+          mkdir -p "$PKG_ROOT/DEBIAN"
+          cat > "$PKG_ROOT/DEBIAN/control" << EOF
+          Package: glass
+          Version: ${VERSION}
+          Section: editors
+          Priority: optional
+          Architecture: ${DEB_ARCH}
+          Depends: libasound2, libfontconfig1, libvulkan1, libwayland-client0, libxkbcommon-x11-0, libssl3
+          Maintainer: Glass <hello@glass.dev>
+          Description: Glass - A high-performance code editor with built-in browser
+           Glass is a fork of Zed with an integrated CEF-based browser.
+          EOF
+          # Remove leading whitespace from heredoc (dpkg-deb is picky)
+          sed -i 's/^          //' "$PKG_ROOT/DEBIAN/control"
+
+          # ── /usr/lib/glass/ — main binaries + CEF runtime ──
+          LIBDIR="$PKG_ROOT/usr/lib/glass"
+          mkdir -p "$LIBDIR"
+
+          cp "${target_dir}/${{ matrix.target }}/release/zed" "$LIBDIR/glass-editor"
+          cp "${target_dir}/${{ matrix.target }}/release/glass_helper" "$LIBDIR/glass_helper"
+
+          # CEF shared objects
+          cp "$CEF_PATH"/libcef.so "$LIBDIR/"
+          cp "$CEF_PATH"/libEGL.so "$LIBDIR/" 2>/dev/null || true
+          cp "$CEF_PATH"/libGLESv2.so "$LIBDIR/" 2>/dev/null || true
+          cp "$CEF_PATH"/libvk_swiftshader.so "$LIBDIR/" 2>/dev/null || true
+          cp "$CEF_PATH"/libvulkan.so.1 "$LIBDIR/" 2>/dev/null || true
+          cp "$CEF_PATH"/chrome-sandbox "$LIBDIR/" 2>/dev/null || true
+          cp "$CEF_PATH"/v8_context_snapshot.bin "$LIBDIR/" 2>/dev/null || true
+          cp "$CEF_PATH"/snapshot_blob.bin "$LIBDIR/" 2>/dev/null || true
+
+          # CEF resources
+          cp "$CEF_PATH"/*.pak "$LIBDIR/" 2>/dev/null || true
+          cp "$CEF_PATH"/*.dat "$LIBDIR/" 2>/dev/null || true
+          cp -r "$CEF_PATH"/locales "$LIBDIR/" 2>/dev/null || true
+
+          # ── /usr/bin/glass — CLI wrapper ──
+          mkdir -p "$PKG_ROOT/usr/bin"
+          cp "${target_dir}/${{ matrix.target }}/release/cli" "$PKG_ROOT/usr/bin/glass"
+
+          # ── .desktop file ──
+          mkdir -p "$PKG_ROOT/usr/share/applications"
+          cat > "$PKG_ROOT/usr/share/applications/dev.glass.Glass.desktop" << 'DESK'
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=Glass
+          GenericName=Text Editor
+          Comment=A high-performance code editor with built-in browser.
+          TryExec=glass
+          StartupNotify=true
+          Exec=glass %U
+          Icon=glass
+          Categories=Utility;TextEditor;Development;IDE;
+          Keywords=glass;editor;code;
+          MimeType=text/plain;application/x-zerosize;
+          Actions=NewWorkspace;
+
+          [Desktop Action NewWorkspace]
+          Exec=glass --new %U
+          Name=Open a new workspace
+          DESK
+          sed -i 's/^          //' "$PKG_ROOT/usr/share/applications/dev.glass.Glass.desktop"
+
+          # ── Icons ──
+          for size in 512 1024; do
+            mkdir -p "$PKG_ROOT/usr/share/icons/hicolor/${size}x${size}/apps"
+          done
+          cp "crates/zed/resources/app-icon.png" \
+            "$PKG_ROOT/usr/share/icons/hicolor/512x512/apps/glass.png"
+          cp "crates/zed/resources/app-icon@2x.png" \
+            "$PKG_ROOT/usr/share/icons/hicolor/1024x1024/apps/glass.png"
+
+          # ── Licenses ──
+          mkdir -p "$PKG_ROOT/usr/share/doc/glass"
+          cp "assets/licenses.md" "$PKG_ROOT/usr/share/doc/glass/" 2>/dev/null || true
+
+          # ── Build .deb ──
+          dpkg-deb --build --root-owner-group "$PKG_ROOT" "${target_dir}/release/${PKG_NAME}.deb"
+
+          echo "DEB_PATH=${target_dir}/release/${PKG_NAME}.deb" >> $GITHUB_ENV
+          echo "DEB_NAME=${PKG_NAME}.deb" >> $GITHUB_ENV
+
+      # ── Package: .AppImage ──────────────────────────────────────────
+      - name: Build .AppImage
+        run: |
+          export CEF_PATH="$HOME/.local/share/cef"
+          target_dir="${CARGO_TARGET_DIR:-target}"
+          arch="${{ matrix.arch }}"
+          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${VERSION:-0.0.0-dev}"
+          VERSION="${VERSION#v}"
+
+          # Download appimagetool
+          if [ "$arch" = "x86_64" ]; then
+            APPIMAGE_TOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          else
+            APPIMAGE_TOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage"
+          fi
+          curl -L -o /tmp/appimagetool "$APPIMAGE_TOOL_URL"
+          chmod +x /tmp/appimagetool
+
+          # Create AppDir structure
+          APPDIR=$(mktemp -d)/Glass.AppDir
+          mkdir -p "$APPDIR/usr/bin"
+          mkdir -p "$APPDIR/usr/lib/glass"
+          mkdir -p "$APPDIR/usr/share/applications"
+          mkdir -p "$APPDIR/usr/share/icons/hicolor/512x512/apps"
+
+          # Main binaries
+          cp "${target_dir}/${{ matrix.target }}/release/cli" "$APPDIR/usr/bin/glass"
+          cp "${target_dir}/${{ matrix.target }}/release/zed" "$APPDIR/usr/lib/glass/glass-editor"
+          cp "${target_dir}/${{ matrix.target }}/release/glass_helper" "$APPDIR/usr/lib/glass/glass_helper"
+
+          # CEF runtime
+          cp "$CEF_PATH"/libcef.so "$APPDIR/usr/lib/glass/"
+          cp "$CEF_PATH"/libEGL.so "$APPDIR/usr/lib/glass/" 2>/dev/null || true
+          cp "$CEF_PATH"/libGLESv2.so "$APPDIR/usr/lib/glass/" 2>/dev/null || true
+          cp "$CEF_PATH"/libvk_swiftshader.so "$APPDIR/usr/lib/glass/" 2>/dev/null || true
+          cp "$CEF_PATH"/libvulkan.so.1 "$APPDIR/usr/lib/glass/" 2>/dev/null || true
+          cp "$CEF_PATH"/v8_context_snapshot.bin "$APPDIR/usr/lib/glass/" 2>/dev/null || true
+          cp "$CEF_PATH"/snapshot_blob.bin "$APPDIR/usr/lib/glass/" 2>/dev/null || true
+          cp "$CEF_PATH"/*.pak "$APPDIR/usr/lib/glass/" 2>/dev/null || true
+          cp "$CEF_PATH"/*.dat "$APPDIR/usr/lib/glass/" 2>/dev/null || true
+          cp -r "$CEF_PATH"/locales "$APPDIR/usr/lib/glass/" 2>/dev/null || true
+
+          # Desktop file (top-level for AppImage)
+          cat > "$APPDIR/dev.glass.Glass.desktop" << 'DESK'
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=Glass
+          GenericName=Text Editor
+          Comment=A high-performance code editor with built-in browser.
+          Exec=glass %U
+          Icon=glass
+          Categories=Utility;TextEditor;Development;IDE;
+          DESK
+          sed -i 's/^          //' "$APPDIR/dev.glass.Glass.desktop"
+          cp "$APPDIR/dev.glass.Glass.desktop" "$APPDIR/usr/share/applications/"
+
+          # Icon (top-level for AppImage)
+          cp "crates/zed/resources/app-icon.png" "$APPDIR/glass.png"
+          cp "crates/zed/resources/app-icon.png" "$APPDIR/usr/share/icons/hicolor/512x512/apps/glass.png"
+
+          # AppRun script
+          cat > "$APPDIR/AppRun" << 'APPRUN'
+          #!/bin/bash
+          SELF_DIR="$(dirname "$(readlink -f "$0")")"
+          export LD_LIBRARY_PATH="${SELF_DIR}/usr/lib/glass:${LD_LIBRARY_PATH}"
+          export CEF_PATH="${SELF_DIR}/usr/lib/glass"
+          exec "${SELF_DIR}/usr/bin/glass" "$@"
+          APPRUN
+          chmod +x "$APPDIR/AppRun"
+
+          # Build AppImage
+          APPIMAGE_NAME="Glass-${VERSION}-${arch}.AppImage"
+          ARCH=$arch /tmp/appimagetool --no-appstream "$APPDIR" "${target_dir}/release/${APPIMAGE_NAME}" \
+            || /tmp/appimagetool --appimage-extract-and-run --no-appstream "$APPDIR" "${target_dir}/release/${APPIMAGE_NAME}"
+
+          echo "APPIMAGE_PATH=${target_dir}/release/${APPIMAGE_NAME}" >> $GITHUB_ENV
+          echo "APPIMAGE_NAME=${APPIMAGE_NAME}" >> $GITHUB_ENV
+
+      # ── Also produce .tar.gz (for users who prefer manual install) ──
+      - name: Build .tar.gz bundle
+        run: |
+          export CEF_PATH="$HOME/.local/share/cef"
+          target_dir="${CARGO_TARGET_DIR:-target}"
+          arch="${{ matrix.arch }}"
+          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${VERSION:-0.0.0-dev}"
+          VERSION="${VERSION#v}"
+
+          temp_dir=$(mktemp -d)
+          app_dir="${temp_dir}/glass"
+
+          mkdir -p "${app_dir}/bin" "${app_dir}/lib" "${app_dir}/libexec"
+          mkdir -p "${app_dir}/share/applications"
+          mkdir -p "${app_dir}/share/icons/hicolor/512x512/apps"
+          mkdir -p "${app_dir}/share/icons/hicolor/1024x1024/apps"
+
+          # Binaries
           cp "${target_dir}/${{ matrix.target }}/release/cli" "${app_dir}/bin/glass"
+          cp "${target_dir}/${{ matrix.target }}/release/zed" "${app_dir}/libexec/glass-editor"
           cp "${target_dir}/${{ matrix.target }}/release/glass_helper" "${app_dir}/libexec/glass_helper"
 
-          # --- Shared libraries (from the zed binary) ---
-          mkdir -p "${app_dir}/lib"
-          ldd "${target_dir}/${{ matrix.target }}/release/zed" | \
-            awk '{print $3}' | \
-            grep -v '^\(libstdc++\.so\|libc\.so\|libgcc_s\.so\|libm\.so\|libpthread\.so\|libdl\.so\|libasound\.so\)' | \
-            grep -v '^$' | \
-            while read -r lib; do
-              [ -f "$lib" ] && cp "$lib" "${app_dir}/lib/" || true
-            done
-
-          # --- CEF shared objects & resources ---
+          # CEF runtime
           cp "$CEF_PATH"/libcef.so "${app_dir}/lib/"
           cp "$CEF_PATH"/libEGL.so "${app_dir}/lib/" 2>/dev/null || true
           cp "$CEF_PATH"/libGLESv2.so "${app_dir}/lib/" 2>/dev/null || true
           cp "$CEF_PATH"/libvk_swiftshader.so "${app_dir}/lib/" 2>/dev/null || true
           cp "$CEF_PATH"/libvulkan.so.1 "${app_dir}/lib/" 2>/dev/null || true
-          # chrome-sandbox (optional, needed for sandboxed renderer)
-          cp "$CEF_PATH"/chrome-sandbox "${app_dir}/lib/" 2>/dev/null || true
+          cp "$CEF_PATH"/*.pak "${app_dir}/lib/" 2>/dev/null || true
+          cp "$CEF_PATH"/*.dat "${app_dir}/lib/" 2>/dev/null || true
+          cp "$CEF_PATH"/*.bin "${app_dir}/lib/" 2>/dev/null || true
+          cp -r "$CEF_PATH"/locales "${app_dir}/lib/" 2>/dev/null || true
 
-          # CEF resource files (locales, .pak, .dat, .bin)
-          cp -r "$CEF_PATH"/locales "${app_dir}/" 2>/dev/null || true
-          cp "$CEF_PATH"/*.pak "${app_dir}/" 2>/dev/null || true
-          cp "$CEF_PATH"/*.dat "${app_dir}/" 2>/dev/null || true
-          cp "$CEF_PATH"/*.bin "${app_dir}/" 2>/dev/null || true
+          # Desktop + icons
+          cat > "${app_dir}/share/applications/dev.glass.Glass.desktop" << 'DESK'
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=Glass
+          Exec=glass %U
+          Icon=glass
+          Categories=Utility;TextEditor;Development;IDE;
+          DESK
+          sed -i 's/^          //' "${app_dir}/share/applications/dev.glass.Glass.desktop"
 
-          # --- Icons ---
-          mkdir -p "${app_dir}/share/icons/hicolor/512x512/apps"
-          cp "crates/zed/resources/app-icon${suffix}.png" \
+          cp "crates/zed/resources/app-icon.png" \
             "${app_dir}/share/icons/hicolor/512x512/apps/glass.png"
-          mkdir -p "${app_dir}/share/icons/hicolor/1024x1024/apps"
-          cp "crates/zed/resources/app-icon${suffix}@2x.png" \
+          cp "crates/zed/resources/app-icon@2x.png" \
             "${app_dir}/share/icons/hicolor/1024x1024/apps/glass.png"
 
-          # --- .desktop file ---
-          mkdir -p "${app_dir}/share/applications"
-          export DO_STARTUP_NOTIFY="true"
-          export APP_CLI="glass"
-          export APP_ICON="glass"
-          export APP_ARGS="%U"
-          export APP_NAME="Glass"
-          APP_ID="dev.glass.Glass"
+          cp "assets/licenses.md" "${app_dir}/" 2>/dev/null || true
 
-          envsubst < "crates/zed/resources/zed.desktop.in" > \
-            "${app_dir}/share/applications/${APP_ID}.desktop"
-          chmod +x "${app_dir}/share/applications/${APP_ID}.desktop"
+          TARBALL="Glass-${VERSION}-linux-${arch}.tar.gz"
+          tar -czvf "${target_dir}/release/${TARBALL}" -C "${temp_dir}" glass
 
-          # --- Licenses ---
-          cp "assets/licenses.md" "${app_dir}/licenses.md" 2>/dev/null || true
+          echo "TARBALL_PATH=${target_dir}/release/${TARBALL}" >> $GITHUB_ENV
+          echo "TARBALL_NAME=${TARBALL}" >> $GITHUB_ENV
 
-          # --- Create archive ---
-          archive="glass-linux-${arch}.tar.gz"
-          tar -czvf "${target_dir}/release/${archive}" -C "${temp_dir}" "glass${suffix}.app"
-
-          # --- Remote server ---
-          gzip -f --stdout --best \
-            "${target_dir}/${{ matrix.musl_target }}/release/remote_server" \
-            > "${target_dir}/glass-remote-server-linux-${arch}.gz"
-
-          echo "ARCHIVE_PATH=${target_dir}/release/${archive}" >> $GITHUB_ENV
-          echo "REMOTE_SERVER_PATH=${target_dir}/glass-remote-server-linux-${arch}.gz" >> $GITHUB_ENV
-
-      # -----------------------------------------------------------------------
-      # Strip debug info
-      # -----------------------------------------------------------------------
-      - name: Strip binaries
+      # ── Remote server ────────────────────────────────────────────────
+      - name: Package remote server
         run: |
           target_dir="${CARGO_TARGET_DIR:-target}"
-          llvm-objcopy --strip-debug "${target_dir}/${{ matrix.target }}/release/zed" 2>/dev/null || \
-            strip --strip-debug "${target_dir}/${{ matrix.target }}/release/zed"
-          llvm-objcopy --strip-debug "${target_dir}/${{ matrix.target }}/release/cli" 2>/dev/null || \
-            strip --strip-debug "${target_dir}/${{ matrix.target }}/release/cli"
-          llvm-objcopy --strip-debug "${target_dir}/${{ matrix.target }}/release/glass_helper" 2>/dev/null || \
-            strip --strip-debug "${target_dir}/${{ matrix.target }}/release/glass_helper"
+          arch="${{ matrix.arch }}"
+          gzip -f --stdout --best \
+            "${target_dir}/${{ matrix.musl_target }}/release/remote_server" \
+            > "${target_dir}/release/glass-remote-server-linux-${arch}.gz"
 
-      # -----------------------------------------------------------------------
-      # Upload artifacts
-      # -----------------------------------------------------------------------
-      - name: Upload Linux bundle
+          echo "REMOTE_SERVER_PATH=${target_dir}/release/glass-remote-server-linux-${arch}.gz" >> $GITHUB_ENV
+
+      # ── Upload artifacts ─────────────────────────────────────────────
+      - name: Upload .deb
         uses: actions/upload-artifact@v4
         with:
-          name: glass-linux-${{ matrix.arch }}.tar.gz
-          path: ${{ env.ARCHIVE_PATH }}
+          name: ${{ env.DEB_NAME }}
+          path: ${{ env.DEB_PATH }}
+          if-no-files-found: error
+
+      - name: Upload .AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APPIMAGE_NAME }}
+          path: ${{ env.APPIMAGE_PATH }}
+          if-no-files-found: error
+
+      - name: Upload .tar.gz
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.TARBALL_NAME }}
+          path: ${{ env.TARBALL_PATH }}
           if-no-files-found: error
 
       - name: Upload remote server
@@ -355,13 +441,15 @@ jobs:
           path: ${{ env.REMOTE_SERVER_PATH }}
           if-no-files-found: error
 
-  # ---------------------------------------------------------------------------
-  # Release (only on tag push or manual trigger)
-  # ---------------------------------------------------------------------------
-  release-linux:
-    name: Create/Update GitHub Release (Linux)
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
-    needs: [build-linux, test-linux]
+    timeout-minutes: 90
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Attach to GitHub Release (only if a version tag was provided)
+  # ─────────────────────────────────────────────────────────────────────
+  release:
+    name: Attach to GitHub Release
+    if: github.event.inputs.version != '' || github.event.inputs.attach_to_release != ''
+    needs: [build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -374,30 +462,41 @@ jobs:
           path: artifacts
 
       - name: List artifacts
-        run: ls -lR artifacts
+        run: find artifacts -type f | sort
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.attach_to_release }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ github.event.inputs.version }}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Create or update release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v0.0.0-dev-{0}', github.sha) }}
-          name: Glass ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }} (Linux)
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Glass ${{ steps.tag.outputs.tag }}
           draft: false
-          prerelease: ${{ github.ref_type != 'tag' }}
+          prerelease: false
+          fail_on_unmatched_files: false
           files: |
-            artifacts/glass-linux-x86_64.tar.gz/glass-linux-x86_64.tar.gz
-            artifacts/glass-remote-server-linux-x86_64.gz/glass-remote-server-linux-x86_64.gz
+            artifacts/**/*.deb
+            artifacts/**/*.AppImage
+            artifacts/**/*.tar.gz
+            artifacts/**/*.gz
           body: |
-            ## Glass Linux Build
+            ## Glass ${{ steps.tag.outputs.tag }} — Linux
 
-            ### Installation
-            ```bash
-            tar -xzf glass-linux-x86_64.tar.gz
-            # Move to /opt or ~/.local
-            sudo mv glass.app /opt/glass
-            sudo ln -sf /opt/glass/bin/glass /usr/local/bin/glass
-            ```
+            ### Downloads
+            | Format | Description |
+            |--------|-------------|
+            | `.deb` | Debian/Ubuntu — install with `sudo dpkg -i glass_*.deb` |
+            | `.AppImage` | Portable — `chmod +x Glass-*.AppImage && ./Glass-*.AppImage` |
+            | `.tar.gz` | Manual install — extract and add `bin/` to PATH |
 
             ### Requirements
             - Vulkan-capable GPU driver
             - Wayland or X11 display server
-            - PipeWire or ALSA for audio
+            - glibc 2.31+ (Ubuntu 22.04+, Fedora 36+, etc.)
