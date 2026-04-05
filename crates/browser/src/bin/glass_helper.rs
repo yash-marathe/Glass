@@ -86,9 +86,47 @@ fn main() {
         std::process::exit(1);
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     {
-        eprintln!("Helper is only needed on macOS");
+        // On Linux, CEF's libcef.so is loaded via LD_LIBRARY_PATH or rpath
+        // so no explicit library loading is needed — just init and run.
+        let cef_dir = match std::env::var("CEF_PATH") {
+            Ok(path) => std::path::PathBuf::from(path),
+            Err(_) => {
+                let home = std::env::var("HOME").expect("HOME not set");
+                std::path::PathBuf::from(home).join(".local/share/cef")
+            }
+        };
+
+        let libcef_path = cef_dir.join("libcef.so");
+        if !libcef_path.exists() {
+            eprintln!(
+                "CEF library not found at {}. Set CEF_PATH or install CEF to ~/.local/share/cef",
+                libcef_path.display()
+            );
+            std::process::exit(1);
+        }
+
+        let args = cef::args::Args::new();
+        let mut app = browser::build_cef_app();
+
+        let exit_code = cef::execute_process(
+            Some(args.as_main_args()),
+            Some(&mut app),
+            std::ptr::null_mut(),
+        );
+
+        if exit_code >= 0 {
+            std::process::exit(exit_code);
+        }
+
+        eprintln!("Helper was invoked as browser process - this shouldn't happen");
+        std::process::exit(1);
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        eprintln!("Helper is not supported on this platform");
         std::process::exit(1);
     }
 }

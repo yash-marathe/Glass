@@ -185,7 +185,6 @@ pub fn build_cef_app() -> cef::App {
 // ── CEF path resolution ──────────────────────────────────────────────
 
 /// Resolve the CEF directory from `CEF_PATH` env var, falling back to `~/.local/share/cef`.
-#[cfg(target_os = "macos")]
 fn resolve_cef_dir_from_env() -> Option<PathBuf> {
     let cef_dir = match std::env::var("CEF_PATH") {
         Ok(path) => PathBuf::from(path),
@@ -194,10 +193,19 @@ fn resolve_cef_dir_from_env() -> Option<PathBuf> {
             PathBuf::from(home).join(".local/share/cef")
         }
     };
-    if cef_dir
+
+    #[cfg(target_os = "macos")]
+    let found = cef_dir
         .join("Chromium Embedded Framework.framework/Chromium Embedded Framework")
-        .exists()
-    {
+        .exists();
+
+    #[cfg(target_os = "linux")]
+    let found = cef_dir.join("libcef.so").exists();
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let found = false;
+
+    if found {
         Some(cef_dir)
     } else {
         None
@@ -263,7 +271,6 @@ impl CefInstance {
                     *CEF_LIBRARY_LOADER.lock() = Some(loader);
                 }
                 _ => {
-                    // Not running from a bundle - try CEF_PATH env var or ~/.local/share/cef
                     match resolve_cef_dir_from_env() {
                         Some(cef_dir) => {
                             if !load_cef_framework_from_dir(&cef_dir) {
@@ -279,6 +286,18 @@ impl CefInstance {
                         }
                     }
                 }
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            // On Linux, libcef.so is loaded via LD_LIBRARY_PATH or rpath.
+            // Just verify it's reachable.
+            if resolve_cef_dir_from_env().is_none() {
+                log::warn!(
+                    "[browser::cef_instance] CEF not found. Set CEF_PATH or install to ~/.local/share/cef"
+                );
+                return Ok(());
             }
         }
 
@@ -331,6 +350,7 @@ impl CefInstance {
         {
             crate::macos_protocol::add_cef_protocols_to_nsapp();
         }
+        // No equivalent protocol patching needed on Linux.
 
         let args = cef::args::Args::new();
 
@@ -357,27 +377,32 @@ impl CefInstance {
              Chrome/145.0.7632.75 Safari/537.36",
         );
 
-        #[cfg(target_os = "macos")]
-        {
-            if let Ok(exe_path) = std::env::current_exe() {
-                if let Some(exe_dir) = exe_path.parent() {
-                    // Try bundle path first: .app/Contents/Frameworks/Glass Helper.app/...
-                    let bundle_helper =
-                        exe_dir.join("../Frameworks/Glass Helper.app/Contents/MacOS/Glass Helper");
-                    // Fall back to glass_helper next to the executable (cargo run)
-                    let dev_helper = exe_dir.join("glass_helper");
+        // Locate the helper subprocess executable.
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                #[cfg(target_os = "macos")]
+                let helper_candidates = [
+                    exe_dir.join("../Frameworks/Glass Helper.app/Contents/MacOS/Glass Helper"),
+                    exe_dir.join("glass_helper"),
+                ];
 
-                    let helper_path = if bundle_helper.exists() {
-                        bundle_helper.canonicalize().ok()
-                    } else if dev_helper.exists() {
-                        dev_helper.canonicalize().ok()
-                    } else {
-                        None
-                    };
+                #[cfg(target_os = "linux")]
+                let helper_candidates = [
+                    exe_dir.join("glass_helper"),
+                    exe_dir.join("../libexec/glass_helper"),
+                ];
 
-                    if let Some(path) = helper_path {
-                        if let Some(path_str) = path.to_str() {
-                            settings.browser_subprocess_path = cef::CefString::from(path_str);
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                let helper_candidates: [PathBuf; 0] = [];
+
+                for candidate in &helper_candidates {
+                    if candidate.exists() {
+                        if let Some(path) = candidate.canonicalize().ok() {
+                            if let Some(path_str) = path.to_str() {
+                                settings.browser_subprocess_path =
+                                    cef::CefString::from(path_str);
+                                break;
+                            }
                         }
                     }
                 }
@@ -406,6 +431,22 @@ impl CefInstance {
                                 settings.main_bundle_path = cef::CefString::from(dir_str);
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // On Linux, set the resources and locales paths so CEF can find .pak files.
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(cef_dir) = resolve_cef_dir_from_env() {
+                if let Some(dir_str) = cef_dir.to_str() {
+                    settings.resources_dir_path = cef::CefString::from(dir_str);
+                }
+                let locales_dir = cef_dir.join("locales");
+                if locales_dir.exists() {
+                    if let Some(loc_str) = locales_dir.to_str() {
+                        settings.locales_dir_path = cef::CefString::from(loc_str);
                     }
                 }
             }

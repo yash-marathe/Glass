@@ -1,0 +1,403 @@
+name: Build Linux
+
+on:
+  pull_request:
+    branches: ["**"]
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Create a release (attach artifacts to GitHub Release)"
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  CARGO_INCREMENTAL: "0"
+  CC: clang
+  CXX: clang++
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Lint & clippy (Linux)
+  # ---------------------------------------------------------------------------
+  clippy-linux:
+    name: Clippy (Linux)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: ./script/linux
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Download WASI SDK
+        run: ./script/download-wasi-sdk
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy-linux
+
+      - name: Run clippy
+        run: ./script/clippy
+
+  # ---------------------------------------------------------------------------
+  # Tests (Linux)
+  # ---------------------------------------------------------------------------
+  test-linux:
+    name: Tests (Linux)
+    runs-on: ubuntu-22.04
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 500ms
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: ./script/linux
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Download WASI SDK
+        run: ./script/download-wasi-sdk
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-linux
+
+      - name: Run tests
+        run: cargo nextest run --workspace --no-fail-fast --no-tests=warn
+
+    timeout-minutes: 60
+
+  # ---------------------------------------------------------------------------
+  # Build Linux binary + bundle (x86_64 and aarch64)
+  # ---------------------------------------------------------------------------
+  build-linux:
+    name: Build Linux (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: [clippy-linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            musl_target: x86_64-unknown-linux-musl
+            cef_platform: linux64
+          # Uncomment for ARM64 when a runner is available:
+          # - arch: aarch64
+          #   runner: ubuntu-22.04-arm64
+          #   target: aarch64-unknown-linux-gnu
+          #   musl_target: aarch64-unknown-linux-musl
+          #   cef_platform: linuxarm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: ./script/linux
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }},${{ matrix.musl_target }}
+
+      - name: Download WASI SDK
+        run: ./script/download-wasi-sdk
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-linux-${{ matrix.arch }}
+
+      - name: Install cargo-about
+        run: cargo install "cargo-about@0.8.2" --locked || true
+
+      - name: Generate licenses
+        run: ./script/generate-licenses
+
+      # -----------------------------------------------------------------------
+      # Download CEF for Linux
+      # -----------------------------------------------------------------------
+      - name: Cache CEF
+        id: cache-cef
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/cef
+          key: cef-${{ matrix.cef_platform }}-v145.0.28
+
+      - name: Download CEF
+        if: steps.cache-cef.outputs.cache-hit != 'true'
+        run: |
+          CEF_PATH="$HOME/.local/share/cef"
+          mkdir -p "$CEF_PATH"
+
+          CEF_VERSION="145.0.28"
+          CEF_CDN="https://cef-builds.spotifycdn.com"
+          INDEX_JSON=$(curl -sL "$CEF_CDN/index.json")
+
+          CEF_FILE=$(echo "$INDEX_JSON" | jq -r \
+            '.${{ matrix.cef_platform }}.versions[]
+             | select(.cef_version | startswith("'"$CEF_VERSION"'+"))
+             | .files[] | select(.type == "minimal") | .name' | head -1)
+
+          CEF_SHA1=$(echo "$INDEX_JSON" | jq -r \
+            '.${{ matrix.cef_platform }}.versions[]
+             | select(.cef_version | startswith("'"$CEF_VERSION"'+"))
+             | .files[] | select(.type == "minimal") | .sha1' | head -1)
+
+          if [ -z "$CEF_FILE" ] || [ "$CEF_FILE" = "null" ]; then
+            echo "Error: Could not find CEF $CEF_VERSION for ${{ matrix.cef_platform }}"
+            exit 1
+          fi
+
+          echo "Downloading CEF: $CEF_FILE"
+          curl -L -o /tmp/cef.tar.bz2 "$CEF_CDN/$CEF_FILE"
+
+          DOWNLOADED_SHA1=$(sha1sum /tmp/cef.tar.bz2 | cut -d' ' -f1)
+          if [ "$DOWNLOADED_SHA1" != "$CEF_SHA1" ]; then
+            echo "SHA1 mismatch: expected $CEF_SHA1, got $DOWNLOADED_SHA1"
+            exit 1
+          fi
+
+          cd /tmp && tar -xjf cef.tar.bz2
+          EXTRACTED_DIR=$(ls -d cef_binary_* | head -1)
+
+          # Copy Release binaries (libcef.so, etc.)
+          cp -R "/tmp/$EXTRACTED_DIR/Release/"* "$CEF_PATH/"
+          # Copy Resources (locales, .pak files, etc.)
+          cp -R "/tmp/$EXTRACTED_DIR/Resources/"* "$CEF_PATH/"
+          # Copy build headers for cef-dll-sys
+          cp -R "/tmp/$EXTRACTED_DIR/include" "$CEF_PATH/" || true
+          cp -R "/tmp/$EXTRACTED_DIR/libcef_dll" "$CEF_PATH/" || true
+          cp -R "/tmp/$EXTRACTED_DIR/cmake" "$CEF_PATH/" || true
+          cp "/tmp/$EXTRACTED_DIR/CMakeLists.txt" "$CEF_PATH/" || true
+
+          rm -rf /tmp/cef.tar.bz2 "/tmp/$EXTRACTED_DIR"
+          echo "CEF extracted to $CEF_PATH"
+          ls "$CEF_PATH"
+
+      # -----------------------------------------------------------------------
+      # Build
+      # -----------------------------------------------------------------------
+      - name: Build Glass
+        env:
+          CEF_PATH: ${{ github.workspace }}/../cef-cache
+          ZED_BUNDLE: "true"
+          RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0-dev' }}
+        run: |
+          export CEF_PATH="$HOME/.local/share/cef"
+          export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$CEF_PATH"
+
+          # Linker flags
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-fuse-ld=lld -C link-args=-Wl,--disable-new-dtags,-rpath,\$ORIGIN/../lib"
+          else
+            export RUSTFLAGS="${RUSTFLAGS:-} -C link-args=-Wl,--disable-new-dtags,-rpath,\$ORIGIN/../lib"
+          fi
+
+          # Main binaries
+          cargo build --release --target ${{ matrix.target }} \
+            --package zed --package cli
+
+          # Browser helper
+          cargo build --release --target ${{ matrix.target }} \
+            --package browser --bin glass_helper
+
+          # Remote server (musl for static linking)
+          RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+crt-static" \
+            cargo build --release --target ${{ matrix.musl_target }} \
+            --package remote_server
+
+      # -----------------------------------------------------------------------
+      # Bundle
+      # -----------------------------------------------------------------------
+      - name: Create Linux bundle
+        run: |
+          export CEF_PATH="$HOME/.local/share/cef"
+          target_dir="${CARGO_TARGET_DIR:-target}"
+          arch="${{ matrix.arch }}"
+          channel=$(<crates/zed/RELEASE_CHANNEL)
+
+          suffix=""
+          if [ "$channel" != "stable" ]; then
+            suffix="-$channel"
+          fi
+
+          temp_dir=$(mktemp -d)
+          app_dir="${temp_dir}/glass${suffix}.app"
+
+          # --- Binaries ---
+          mkdir -p "${app_dir}/bin" "${app_dir}/libexec"
+          cp "${target_dir}/${{ matrix.target }}/release/zed" "${app_dir}/libexec/glass-editor"
+          cp "${target_dir}/${{ matrix.target }}/release/cli" "${app_dir}/bin/glass"
+          cp "${target_dir}/${{ matrix.target }}/release/glass_helper" "${app_dir}/libexec/glass_helper"
+
+          # --- Shared libraries (from the zed binary) ---
+          mkdir -p "${app_dir}/lib"
+          ldd "${target_dir}/${{ matrix.target }}/release/zed" | \
+            awk '{print $3}' | \
+            grep -v '^\(libstdc++\.so\|libc\.so\|libgcc_s\.so\|libm\.so\|libpthread\.so\|libdl\.so\|libasound\.so\)' | \
+            grep -v '^$' | \
+            while read -r lib; do
+              [ -f "$lib" ] && cp "$lib" "${app_dir}/lib/" || true
+            done
+
+          # --- CEF shared objects & resources ---
+          cp "$CEF_PATH"/libcef.so "${app_dir}/lib/"
+          cp "$CEF_PATH"/libEGL.so "${app_dir}/lib/" 2>/dev/null || true
+          cp "$CEF_PATH"/libGLESv2.so "${app_dir}/lib/" 2>/dev/null || true
+          cp "$CEF_PATH"/libvk_swiftshader.so "${app_dir}/lib/" 2>/dev/null || true
+          cp "$CEF_PATH"/libvulkan.so.1 "${app_dir}/lib/" 2>/dev/null || true
+          # chrome-sandbox (optional, needed for sandboxed renderer)
+          cp "$CEF_PATH"/chrome-sandbox "${app_dir}/lib/" 2>/dev/null || true
+
+          # CEF resource files (locales, .pak, .dat, .bin)
+          cp -r "$CEF_PATH"/locales "${app_dir}/" 2>/dev/null || true
+          cp "$CEF_PATH"/*.pak "${app_dir}/" 2>/dev/null || true
+          cp "$CEF_PATH"/*.dat "${app_dir}/" 2>/dev/null || true
+          cp "$CEF_PATH"/*.bin "${app_dir}/" 2>/dev/null || true
+
+          # --- Icons ---
+          mkdir -p "${app_dir}/share/icons/hicolor/512x512/apps"
+          cp "crates/zed/resources/app-icon${suffix}.png" \
+            "${app_dir}/share/icons/hicolor/512x512/apps/glass.png"
+          mkdir -p "${app_dir}/share/icons/hicolor/1024x1024/apps"
+          cp "crates/zed/resources/app-icon${suffix}@2x.png" \
+            "${app_dir}/share/icons/hicolor/1024x1024/apps/glass.png"
+
+          # --- .desktop file ---
+          mkdir -p "${app_dir}/share/applications"
+          export DO_STARTUP_NOTIFY="true"
+          export APP_CLI="glass"
+          export APP_ICON="glass"
+          export APP_ARGS="%U"
+          export APP_NAME="Glass"
+          APP_ID="dev.glass.Glass"
+
+          envsubst < "crates/zed/resources/zed.desktop.in" > \
+            "${app_dir}/share/applications/${APP_ID}.desktop"
+          chmod +x "${app_dir}/share/applications/${APP_ID}.desktop"
+
+          # --- Licenses ---
+          cp "assets/licenses.md" "${app_dir}/licenses.md" 2>/dev/null || true
+
+          # --- Create archive ---
+          archive="glass-linux-${arch}.tar.gz"
+          tar -czvf "${target_dir}/release/${archive}" -C "${temp_dir}" "glass${suffix}.app"
+
+          # --- Remote server ---
+          gzip -f --stdout --best \
+            "${target_dir}/${{ matrix.musl_target }}/release/remote_server" \
+            > "${target_dir}/glass-remote-server-linux-${arch}.gz"
+
+          echo "ARCHIVE_PATH=${target_dir}/release/${archive}" >> $GITHUB_ENV
+          echo "REMOTE_SERVER_PATH=${target_dir}/glass-remote-server-linux-${arch}.gz" >> $GITHUB_ENV
+
+      # -----------------------------------------------------------------------
+      # Strip debug info
+      # -----------------------------------------------------------------------
+      - name: Strip binaries
+        run: |
+          target_dir="${CARGO_TARGET_DIR:-target}"
+          llvm-objcopy --strip-debug "${target_dir}/${{ matrix.target }}/release/zed" 2>/dev/null || \
+            strip --strip-debug "${target_dir}/${{ matrix.target }}/release/zed"
+          llvm-objcopy --strip-debug "${target_dir}/${{ matrix.target }}/release/cli" 2>/dev/null || \
+            strip --strip-debug "${target_dir}/${{ matrix.target }}/release/cli"
+          llvm-objcopy --strip-debug "${target_dir}/${{ matrix.target }}/release/glass_helper" 2>/dev/null || \
+            strip --strip-debug "${target_dir}/${{ matrix.target }}/release/glass_helper"
+
+      # -----------------------------------------------------------------------
+      # Upload artifacts
+      # -----------------------------------------------------------------------
+      - name: Upload Linux bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: glass-linux-${{ matrix.arch }}.tar.gz
+          path: ${{ env.ARCHIVE_PATH }}
+          if-no-files-found: error
+
+      - name: Upload remote server
+        uses: actions/upload-artifact@v4
+        with:
+          name: glass-remote-server-linux-${{ matrix.arch }}.gz
+          path: ${{ env.REMOTE_SERVER_PATH }}
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Release (only on tag push or manual trigger)
+  # ---------------------------------------------------------------------------
+  release-linux:
+    name: Create/Update GitHub Release (Linux)
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true')
+    needs: [build-linux, test-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: ls -lR artifacts
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v0.0.0-dev-{0}', github.sha) }}
+          name: Glass ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }} (Linux)
+          draft: false
+          prerelease: ${{ github.ref_type != 'tag' }}
+          files: |
+            artifacts/glass-linux-x86_64.tar.gz/glass-linux-x86_64.tar.gz
+            artifacts/glass-remote-server-linux-x86_64.gz/glass-remote-server-linux-x86_64.gz
+          body: |
+            ## Glass Linux Build
+
+            ### Installation
+            ```bash
+            tar -xzf glass-linux-x86_64.tar.gz
+            # Move to /opt or ~/.local
+            sudo mv glass.app /opt/glass
+            sudo ln -sf /opt/glass/bin/glass /usr/local/bin/glass
+            ```
+
+            ### Requirements
+            - Vulkan-capable GPU driver
+            - Wayland or X11 display server
+            - PipeWire or ALSA for audio
