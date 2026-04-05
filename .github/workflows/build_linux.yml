@@ -58,12 +58,6 @@ jobs:
         with:
           shared-key: build-linux-${{ matrix.arch }}
 
-      - name: Install cargo-about
-        run: cargo install "cargo-about@0.8.2" --locked || true
-
-      - name: Generate licenses
-        run: ./script/generate-licenses
-
       # ── CEF ──────────────────────────────────────────────────────────
       - name: Cache CEF
         id: cache-cef
