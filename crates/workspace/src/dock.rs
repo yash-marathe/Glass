@@ -69,6 +69,7 @@ fn show_project_sidebar_tab(
         });
     }
 
+    #[cfg(target_os = "macos")]
     if let Some(workspace) = workspace.upgrade() {
         workspace.update(cx, |workspace, cx| {
             workspace.select_sidebar_section(crate::WorkspaceSidebarSection::Project, window, cx);
@@ -289,6 +290,7 @@ impl Render for DockButtonBar {
                             });
                         }
 
+                        #[cfg(target_os = "macos")]
                         if let Some(workspace) = workspace.upgrade() {
                             workspace.update(cx, |workspace, cx| {
                                 workspace.select_sidebar_section(
@@ -318,6 +320,7 @@ impl Render for DockButtonBar {
                             });
                         }
 
+                        #[cfg(target_os = "macos")]
                         if let Some(workspace) = workspace.upgrade() {
                             workspace.update(cx, |workspace, cx| {
                                 workspace.select_sidebar_section(
@@ -347,6 +350,7 @@ impl Render for DockButtonBar {
                             });
                         }
 
+                        #[cfg(target_os = "macos")]
                         if let Some(workspace) = workspace.upgrade() {
                             workspace.update(cx, |workspace, cx| {
                                 workspace.select_sidebar_section(

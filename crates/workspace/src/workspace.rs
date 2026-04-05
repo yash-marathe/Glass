@@ -44,8 +44,10 @@ use client::{
 use collections::{HashMap, HashSet, hash_map};
 use db::smol::future::yield_now;
 use dock::{
-    Dock, DockButtonBar, DockPosition, PanelHandle, PanelNavigationEntry, RESIZE_HANDLE_SIZE,
+    Dock, DockButtonBar, DockPosition, PanelHandle, RESIZE_HANDLE_SIZE,
 };
+#[cfg(target_os = "macos")]
+use dock::PanelNavigationEntry;
 use futures::{
     Future, FutureExt, StreamExt,
     channel::{
@@ -55,13 +57,13 @@ use futures::{
     future::Shared,
 };
 #[cfg(target_os = "macos")]
-use gpui::native_sidebar;
+use gpui::{native_sidebar, WindowBackgroundAppearance};
 use gpui::{
     Action, AnyEntity, AnyView, AnyWeakView, App, AsyncApp, AsyncWindowContext, Bounds, Context,
     CursorStyle, Decorations, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle,
     Focusable, Global, HitboxBehavior, Hsla, KeyContext, Keystroke, ManagedView, MouseButton,
     PathPromptOptions, Point, PromptLevel, Render, ResizeEdge, Size, Stateful, Subscription,
-    SystemWindowTabController, Task, Tiling, WeakEntity, WindowBackgroundAppearance, WindowBounds,
+    SystemWindowTabController, Task, Tiling, WeakEntity, WindowBounds,
     WindowHandle, WindowId, WindowOptions, actions, canvas, point, px, relative, size,
     transparent_black,
 };
@@ -138,7 +140,9 @@ pub use toolbar::{
     PaneSearchBarCallbacks, Toolbar, ToolbarItemEvent, ToolbarItemLocation, ToolbarItemView,
 };
 pub use ui;
-use ui::{IconButtonShape, Tooltip, Window, prelude::*};
+use ui::{Window, prelude::*};
+#[cfg(target_os = "macos")]
+use ui::{IconButtonShape, Tooltip};
 use util::{
     ResultExt, TryFutureExt,
     paths::{PathStyle, SanitizedPath},

@@ -3,9 +3,10 @@ use anyhow::Result;
 use gpui::native_sidebar;
 use gpui::{
     AnyView, App, Context, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle, Focusable,
-    ManagedView, Pixels, Render, Subscription, Task, Tiling, Window, WindowBackgroundAppearance,
-    WindowId, actions,
+    ManagedView, Pixels, Render, Subscription, Task, Tiling, Window, WindowId, actions,
 };
+#[cfg(target_os = "macos")]
+use gpui::WindowBackgroundAppearance;
 #[cfg(not(target_os = "macos"))]
 use gpui::{MouseButton, deferred, px};
 use project::Project;
@@ -23,8 +24,10 @@ pub const SIDEBAR_RESIZE_HANDLE_SIZE: Pixels = px(6.0);
 
 use crate::{
     CloseIntent, CloseWindow, DockPosition, Event as WorkspaceEvent, Item, ModalView, Panel,
-    Workspace, WorkspaceId, WorkspaceSidebarHost, client_side_decorations,
+    Workspace, WorkspaceId, client_side_decorations,
 };
+#[cfg(target_os = "macos")]
+use crate::WorkspaceSidebarHost;
 
 actions!(
     multi_workspace,
@@ -482,6 +485,7 @@ impl MultiWorkspace {
             workspace.invalidate_window_caches(window, cx);
             cx.notify();
         });
+        #[cfg(target_os = "macos")]
         self.sync_workspace_sidebar_host(cx);
         self.serialize(cx);
         self.focus_active_workspace(window, cx);
