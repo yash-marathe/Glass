@@ -43,7 +43,9 @@ jobs:
           clean: false
 
       - name: Install system dependencies
-        run: ./script/linux
+        run: |
+          ./script/linux
+          sudo apt-get install -y ninja-build
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -109,6 +111,9 @@ jobs:
           cp -R "/tmp/$EXTRACTED_DIR/libcef_dll" "$CEF_PATH/" || true
           cp -R "/tmp/$EXTRACTED_DIR/cmake" "$CEF_PATH/" || true
           cp "/tmp/$EXTRACTED_DIR/CMakeLists.txt" "$CEF_PATH/" || true
+
+          # Create archive.json — required by cef-dll-sys build.rs
+          echo '{"type":"minimal","name":"'"$CEF_FILE"'","sha1":"'"$CEF_SHA1"'"}' > "$CEF_PATH/archive.json"
 
           rm -rf /tmp/cef.tar.bz2 "/tmp/$EXTRACTED_DIR"
           echo "CEF extracted to $CEF_PATH"
